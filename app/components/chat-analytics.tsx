@@ -15,19 +15,22 @@ import {
   Bot,
 } from "lucide-react";
 import type { ChatMetrics } from "@/app/lib/types/periskope";
+import TimeFilter from "./time-filter";
+import DateRangePicker from "./date-range-picker";
+import { getDateRange, formatDateForAPI } from "@/app/lib/utils";
 
 interface ChatAnalyticsProps {
   orgPhone: string;
   agent: string;
   chatType: string;
-  customPropertyValue?: string; // Add this prop
+  customPropertyValue?: string;
 }
 
 export default function ChatAnalytics({
   orgPhone,
   agent,
   chatType,
-  customPropertyValue = "", // Default to empty string
+  customPropertyValue = "",
 }: ChatAnalyticsProps) {
   const [metrics, setMetrics] = useState<ChatMetrics | null>(null);
   const [loading, setLoading] = useState(true);
@@ -35,6 +38,21 @@ export default function ChatAnalytics({
     openChats: false,
     delayedChats: false,
   });
+
+  // Add time filter state
+  const [timeFilter, setTimeFilter] = useState<string>("last7days");
+  const [startDateISO, setStartDateISO] = useState("");
+  const [endDateISO, setEndDateISO] = useState("");
+
+  const timePeriodLabels: Record<string, string> = {
+    today: "Today",
+    yesterday: "Yesterday",
+    last7days: "Last 7 Days",
+    last30days: "Last 30 Days",
+    thisMonth: "This Month",
+    lastMonth: "Last Month",
+    custom: "Custom Range",
+  };
 
   const getChatTypeLabel = (type: string) => {
     switch (type) {
@@ -67,9 +85,24 @@ export default function ChatAnalytics({
 
   const chatTypeInfo = getChatTypeLabel(chatType);
 
+  // Initialize time filter with last 7 days
+  useEffect(() => {
+    const { startDate, endDate } = getDateRange("last7days");
+    setStartDateISO(startDate.toISOString().slice(0, 10));
+    setEndDateISO(endDate.toISOString().slice(0, 10));
+  }, []);
+
   useEffect(() => {
     fetchChatMetrics();
-  }, [orgPhone, agent, chatType, customPropertyValue]); // Add customPropertyValue to dependencies
+  }, [
+    orgPhone,
+    agent,
+    chatType,
+    customPropertyValue,
+    timeFilter,
+    startDateISO,
+    endDateISO,
+  ]);
 
   async function fetchChatMetrics() {
     setLoading(true);
@@ -90,6 +123,28 @@ export default function ChatAnalytics({
         params.append("customPropertyId", "property-mhpfkllsoayiisiq");
         params.append("customPropertyValue", customPropertyValue);
       }
+
+      // Add time filter parameters
+      let startTime, endTime;
+      if (timeFilter === "custom") {
+        // Use the date picker values for custom date range
+        startTime = new Date(startDateISO);
+        endTime = new Date(endDateISO);
+        startTime.setHours(0, 0, 0, 0);
+        endTime.setHours(23, 59, 59, 999);
+      } else {
+        // Get date range for preset options
+        const { startDate, endDate } = getDateRange(timeFilter);
+        startTime = startDate;
+        endTime = endDate;
+      }
+
+      // Format dates for API
+      const startTimeISO = formatDateForAPI(startTime);
+      const endTimeISO = formatDateForAPI(endTime);
+
+      params.append("startTime", startTimeISO);
+      params.append("endTime", endTimeISO);
 
       if (params.toString()) {
         url += `?${params.toString()}`;
@@ -373,9 +428,30 @@ export default function ChatAnalytics({
     );
   };
 
+  // Time filter handling component
+  const TimeFilterSection = () => (
+    <div className="mb-6">
+      <TimeFilter
+        selectedFilter={timeFilter}
+        onFilterChange={(filter) => setTimeFilter(filter)}
+      />
+      <DateRangePicker
+        startDate={startDateISO}
+        endDate={endDateISO}
+        onStartDateChange={setStartDateISO}
+        onEndDateChange={setEndDateISO}
+        isVisible={timeFilter === "custom"}
+      />
+    </div>
+  );
+
+  // Loading skeleton for the entire component
   if (loading) {
     return (
       <div className="space-y-8">
+        {/* Include time filter UI even during loading */}
+        <TimeFilterSection />
+
         {/* Loading skeleton for metrics */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           {Array.from({ length: 4 }).map((_, i) => (
@@ -420,34 +496,42 @@ export default function ChatAnalytics({
 
   if (!metrics) {
     return (
-      <div className="flex flex-col items-center justify-center py-16 text-center">
-        <AlertTriangle className="h-16 w-16 text-red-500 mb-4" />
-        <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">
-          Failed to Load Chat Metrics
-        </h3>
-        <p className="text-gray-600 dark:text-gray-400 mb-4">
-          We couldn't fetch the chat analytics data. Please check your
-          connection and try again.
-        </p>
-        <button
-          onClick={fetchChatMetrics}
-          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-        >
-          Retry
-        </button>
+      <div className="space-y-8">
+        {/* Include time filter UI even when there's an error */}
+        <TimeFilterSection />
+
+        <div className="flex flex-col items-center justify-center py-16 text-center">
+          <AlertTriangle className="h-16 w-16 text-red-500 mb-4" />
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">
+            Failed to Load Chat Metrics
+          </h3>
+          <p className="text-gray-600 dark:text-gray-400 mb-4">
+            We couldn't fetch the chat analytics data. Please check your
+            connection and try again.
+          </p>
+          <button
+            onClick={fetchChatMetrics}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            Retry
+          </button>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="space-y-8">
+      {/* Time filter UI */}
+      <TimeFilterSection />
+
       {/* Metrics Overview */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <MetricCard
           icon={MessageCircle}
           title={`Open ${chatTypeInfo.plural}`}
           value={metrics.totalOpenChats}
-          subtitle={`Currently Active ${chatTypeInfo.plural}`}
+          subtitle={`${timePeriodLabels[timeFilter]}`}
           type="count"
         />
 
@@ -490,6 +574,24 @@ export default function ChatAnalytics({
         </div>
       )}
 
+      {/* Time Period Badge */}
+      <div className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-lg p-3 flex items-center">
+        <div className="flex-1">
+          <span className="text-gray-700 dark:text-gray-300 font-medium">
+            Time Period:
+          </span>
+          <span className="ml-2 text-gray-800 dark:text-gray-200">
+            {timePeriodLabels[timeFilter]}
+            {timeFilter === "custom" && (
+              <>
+                {" "}
+                ({startDateISO} to {endDateISO})
+              </>
+            )}
+          </span>
+        </div>
+      </div>
+
       {/* Detailed Chat Lists */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
         {/* Open Chats Details */}
@@ -522,7 +624,7 @@ export default function ChatAnalytics({
                 <div className="text-center py-12">
                   <MessageCircle className="h-12 w-12 text-gray-400 mx-auto mb-4" />
                   <p className="text-gray-500 dark:text-gray-400">
-                    No open {chatType} chats found
+                    No open {chatType} chats found in this time period
                   </p>
                 </div>
               ) : (
@@ -589,8 +691,9 @@ export default function ChatAnalytics({
                     All Caught Up!
                   </h4>
                   <p className="text-green-600 dark:text-green-500">
-                    No delayed responses. Great job keeping up with customer
-                    inquiries!
+                    No delayed responses during{" "}
+                    {timePeriodLabels[timeFilter].toLowerCase()}. Great job
+                    keeping up with customer inquiries!
                   </p>
                 </div>
               ) : (

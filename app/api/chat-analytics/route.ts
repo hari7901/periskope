@@ -20,6 +20,9 @@ export async function GET(request: NextRequest) {
   const chatType = params.get("chatType") ?? "group"; // Default to group, but allow user/business
   const customPropertyId = params.get("customPropertyId") ?? undefined;
   const customPropertyValue = params.get("customPropertyValue") ?? undefined;
+  // Add time filter parameters
+  const startTimeISO = params.get("startTime") ?? undefined;
+  const endTimeISO = params.get("endTime") ?? undefined;
 
   console.log("[chat-analytics] fetching chat metrics", {
     orgPhone,
@@ -27,6 +30,8 @@ export async function GET(request: NextRequest) {
     chatType,
     customPropertyId,
     customPropertyValue,
+    startTimeISO,
+    endTimeISO,
   });
 
   try {
@@ -42,6 +47,14 @@ export async function GET(request: NextRequest) {
       baseOptions.custom_properties = {
         [customPropertyId]: customPropertyValue,
       };
+    }
+
+    // Add time filters if provided
+    if (startTimeISO) {
+      baseOptions.start_time = startTimeISO;
+    }
+    if (endTimeISO) {
+      baseOptions.end_time = endTimeISO;
     }
 
     const response = await periskopeClient.chat.getChats(baseOptions);
@@ -336,6 +349,10 @@ export async function GET(request: NextRequest) {
           },
         },
         filterApplied: `${chatType}_only`,
+        timeFilter: {
+          startTime: startTimeISO,
+          endTime: endTimeISO,
+        }
       },
     };
 
@@ -355,6 +372,7 @@ export async function GET(request: NextRequest) {
         business: "12h from customer message",
       },
       filterApplied: `${chatType}_only`,
+      timeRange: startTimeISO && endTimeISO ? `${startTimeISO} to ${endTimeISO}` : "all time",
     });
 
     return NextResponse.json({ metrics });
