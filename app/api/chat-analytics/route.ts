@@ -11,80 +11,243 @@ interface DetailedChatInfo {
   chatType?: string;
   agentPhone?: string | null;
   lastActivity?: string;
+  orgPhone?: string | null;
 }
 
 export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams;
-  const orgPhone = params.get("orgPhone") ?? undefined;
+  const chatType = params.get("chatType") ?? undefined;
   const agent = params.get("agent") ?? undefined;
-  const chatType = params.get("chatType") ?? "group"; // Default to group, but allow user/business
-  const customPropertyId = params.get("customPropertyId") ?? undefined;
-  const customPropertyValue = params.get("customPropertyValue") ?? undefined;
-  // Add time filter parameters
-  const startTimeISO = params.get("startTime") ?? undefined;
-  const endTimeISO = params.get("endTime") ?? undefined;
-
-  console.log("[chat-analytics] fetching chat metrics", {
-    orgPhone,
-    agent,
-    chatType,
-    customPropertyId,
-    customPropertyValue,
-    startTimeISO,
-    endTimeISO,
+  const orgPhone = params.get("orgPhone") ?? undefined;
+  
+  // Get filter state - default is true for open chats filter
+  const filterOpen = params.get("filterOpen") !== "false"; // Default: true (only open chats)
+  
+  // Get time filter
+  const timeFilter = params.get("timeFilter") ?? "all"; // Options: "day", "week", "month", "all"
+  
+  console.log("[chat-analytics] fetching chats with filters:", {
+    chatType: chatType || "all",
+    agent: agent || "all",
+    orgPhone: orgPhone || "all",
+    filterOpen,
+    timeFilter
   });
 
   try {
-    // Fetch chats of specified type that are open (chats without closed_at)
-    const baseOptions: any = {
-      limit: 2000,
-      chat_type: chatType, // Use the chatType parameter
-      ...(orgPhone && { org_phone: orgPhone }),
-    };
+    // Fetch all chats with pagination and deduplication
+    const allChats = await fetchAllChatsWithDeduplication(chatType);
+    
+    console.log(`[chat-analytics] successfully fetched ${allChats.length} unique chats across all pages`);
 
-    // Add custom property filter if provided
-    if (customPropertyId && customPropertyValue) {
-      baseOptions.custom_properties = {
-        [customPropertyId]: customPropertyValue,
-      };
+    // Apply filters sequentially to make it easier to track the effect of each filter
+    
+    // 1. Filter by open status if requested
+    let filteredChats = filterOpen 
+      ? allChats.filter(chat => !chat.closed_at)
+      : allChats;
+    
+    console.log(`[chat-analytics] after open filter: ${filteredChats.length} chats`);
+    
+    // 2. Apply time filter
+    if (timeFilter !== "all") {
+      const now = new Date();
+      let cutoffDate = new Date();
+      
+      switch (timeFilter) {
+        case "day":
+          cutoffDate.setDate(now.getDate() - 1); // Last 24 hours
+          break;
+        case "week":
+          cutoffDate.setDate(now.getDate() - 7); // Last 7 days
+          break;
+        case "month":
+          cutoffDate.setMonth(now.getMonth() - 1); // Last 30 days
+          break;
+        default:
+          // No time filtering
+          break;
+      }
+      
+      const cutoffTime = cutoffDate.getTime();
+      
+      filteredChats = filteredChats.filter(chat => {
+        // Use the latest of these timestamps for time filtering
+        const lastActivityTime = Math.max(
+          chat.latest_message?.timestamp ? new Date(chat.latest_message.timestamp).getTime() : 0,
+          chat.updated_at ? new Date(chat.updated_at).getTime() : 0
+        );
+        
+        // Include chat if it has activity after the cutoff time
+        return lastActivityTime >= cutoffTime;
+      });
+      
+      console.log(`[chat-analytics] after time filter (${timeFilter}): ${filteredChats.length} chats`);
+    }
+    
+    // 3. Filter by agent if specified
+    if (agent) {
+      const agentWithoutSuffix = agent.replace('@c.us', '');
+      const agentWithSuffix = agent.includes('@c.us') ? agent : `${agent}@c.us`;
+      
+      filteredChats = filteredChats.filter(chat => {
+        // Check org_phone
+        const chatOrgPhone = chat.org_phone || '';
+        if (chatOrgPhone === agentWithSuffix || chatOrgPhone.replace('@c.us', '') === agentWithoutSuffix) {
+          return true;
+        }
+        
+        // Check assigned_to
+        if (chat.assigned_to === agentWithoutSuffix || chat.assigned_to === agentWithSuffix) {
+          return true;
+        }
+        
+        // Check latest_message sender
+        if (chat.latest_message?.sender_phone === agentWithoutSuffix || 
+            chat.latest_message?.sender_phone === agentWithSuffix) {
+          return true;
+        }
+        
+        // Check chat_org_phones
+        if (chat.chat_org_phones && (
+            chat.chat_org_phones.includes(agentWithoutSuffix) || 
+            chat.chat_org_phones.includes(agentWithSuffix))) {
+          return true;
+        }
+        
+        return false;
+      });
+      
+      console.log(`[chat-analytics] after agent filter: ${filteredChats.length} chats`);
+    }
+    
+    // 4. Filter by orgPhone if specified
+    if (orgPhone) {
+      const orgPhoneWithoutSuffix = orgPhone.replace('@c.us', '');
+      const orgPhoneWithSuffix = orgPhone.includes('@c.us') ? orgPhone : `${orgPhone}@c.us`;
+      
+      filteredChats = filteredChats.filter(chat => {
+        return chat.org_phone === orgPhoneWithSuffix || 
+               chat.org_phone?.replace('@c.us', '') === orgPhoneWithoutSuffix;
+      });
+      
+      console.log(`[chat-analytics] after orgPhone filter: ${filteredChats.length} chats`);
     }
 
-    // Add time filters if provided
-    if (startTimeISO) {
-      baseOptions.start_time = startTimeISO;
-    }
-    if (endTimeISO) {
-      baseOptions.end_time = endTimeISO;
-    }
+    // Display chat type distribution of remaining chats
+    const userChats = filteredChats.filter(chat => chat.chat_type === 'user').length;
+    const groupChats = filteredChats.filter(chat => chat.chat_type === 'group').length;
+    const businessChats = filteredChats.filter(chat => chat.chat_type === 'business').length;
+    
+    console.log(`[chat-analytics] final chat distribution: user=${userChats}, group=${groupChats}, business=${businessChats}`);
 
-    const response = await periskopeClient.chat.getChats(baseOptions);
-    const container = response.data ?? response;
-    const allChats: Chat[] = Array.isArray(container.chats)
-      ? container.chats
-      : Array.isArray(response.chats)
-      ? response.chats
-      : [];
-
-    // Filter for open chats of specified type (no closed_at timestamp)
-    const openChatsOfType = allChats.filter(
-      (chat) => !chat.closed_at && chat.chat_type === chatType
+    // Process the filtered chats
+    return processChats(filteredChats, chatType || 'all', timeFilter);
+    
+  } catch (error: any) {
+    console.error("[chat-analytics] error fetching chat metrics:", error);
+    return NextResponse.json(
+      { 
+        error: "Failed to fetch chat metrics", 
+        details: error.message,
+        stack: error.stack
+      },
+      { status: 500 }
     );
-
-    // If agent filter is specified, filter by assigned_to or latest message sender
-    const filteredChats = agent
-      ? openChatsOfType.filter(
-          (chat) =>
-            chat.assigned_to === agent ||
-            chat.latest_message?.sender_phone === agent
-        )
-      : openChatsOfType;
-
+  }
+  
+  // Helper function to fetch all chats with pagination and deduplication
+  async function fetchAllChatsWithDeduplication(chatType?: string): Promise<Chat[]> {
+    const chatMap = new Map<string, Chat>(); // Use Map for deduplication by chat_id
+    let hasMoreChats = true;
+    let offset = 0;
+    const limit = 1000; // Maximum page size
+    let pageCount = 0;
+    let duplicatesFound = 0;
+    
+    while (hasMoreChats) {
+      pageCount++;
+      console.log(`[chat-analytics] fetching page ${pageCount} (offset: ${offset}, limit: ${limit}${chatType ? `, type: ${chatType}` : ''})`);
+      
+      // Configure API call options for this page
+      const options: any = {
+        limit,
+        offset
+      };
+      
+      // Add chat type filter if specified at the API level for more efficient filtering
+      if (chatType) {
+        options.chat_type = chatType;
+      }
+      
+      try {
+        // Make the API call to get a page of chats
+        const response = await periskopeClient.chat.getChats(options);
+        
+        // Extract chats from response
+        const chats: Chat[] = response.data?.chats || [];
+        console.log(`[chat-analytics] page ${pageCount} returned ${chats.length} chats`);
+        
+        // Add chats to our Map for deduplication
+        let newChatsInPage = 0;
+        chats.forEach(chat => {
+          if (chatMap.has(chat.chat_id)) {
+            duplicatesFound++;
+            console.log(`[chat-analytics] duplicate chat found: ${chat.chat_id} (${chat.chat_name})`);
+            // Keep the most recently updated version
+            const existingChat = chatMap.get(chat.chat_id)!;
+            const existingUpdated = new Date(existingChat.updated_at || existingChat.created_at).getTime();
+            const newUpdated = new Date(chat.updated_at || chat.created_at).getTime();
+            
+            if (newUpdated > existingUpdated) {
+              chatMap.set(chat.chat_id, chat);
+              console.log(`[chat-analytics] updated duplicate with newer version: ${chat.chat_id}`);
+            }
+          } else {
+            chatMap.set(chat.chat_id, chat);
+            newChatsInPage++;
+          }
+        });
+        
+        console.log(`[chat-analytics] page ${pageCount}: ${newChatsInPage} new chats, ${chats.length - newChatsInPage} duplicates`);
+        
+        // Check if we should fetch more
+        if (chats.length < limit) {
+          // We got fewer chats than the limit, so we've reached the end
+          hasMoreChats = false;
+          console.log(`[chat-analytics] reached end of chats (${chats.length} < ${limit})`);
+        } else {
+          // We got a full page, so there might be more
+          offset += limit;
+          console.log(`[chat-analytics] continuing to next page, new offset: ${offset}`);
+          
+          // Safety check: if we've fetched a lot of pages, break to avoid infinite loops
+          if (pageCount >= 20) {
+            console.log(`[chat-analytics] reached maximum page count (${pageCount}), stopping pagination`);
+            hasMoreChats = false;
+          }
+        }
+      } catch (error) {
+        console.error(`[chat-analytics] error fetching page ${pageCount}:`, error);
+        hasMoreChats = false; // Stop on error
+      }
+    }
+    
+    // Convert Map back to array
+    const uniqueChats = Array.from(chatMap.values());
+    
+    console.log(`[chat-analytics] pagination complete: fetched ${pageCount} pages with ${uniqueChats.length} unique chats (${duplicatesFound} duplicates removed)`);
+    return uniqueChats;
+  }
+  
+  // Helper function to process chats and calculate metrics
+  function processChats(chats: Chat[], filterType: string, timeFilter: string) {
     const now = new Date();
     const currentTime = now.getTime();
     const twentyFourHoursMs = 24 * 60 * 60 * 1000;
 
-    // Calculate metrics for chats of specified type
-    const totalOpenChats = filteredChats.length;
+    // Calculate metrics for chats
+    const totalOpenChats = chats.length;
     let totalAgeMs = 0;
     let maxAgeMs = 0;
     let chatsWithDelayedResponse = 0;
@@ -92,7 +255,7 @@ export async function GET(request: NextRequest) {
     const openChatDetails: DetailedChatInfo[] = [];
     const delayedResponseDetails: any[] = [];
 
-    filteredChats.forEach((chat) => {
+    chats.forEach((chat) => {
       // Robust age calculation with chat type-specific logic
       let lastActivityTime: number;
       let ageCalculationMethod: string;
@@ -108,7 +271,7 @@ export async function GET(request: NextRequest) {
       };
 
       // Chat type-specific age calculation logic
-      if (chatType === "user") {
+      if (chat.chat_type === "user") {
         // For user chats, prioritize latest message as it shows actual conversation activity
         if (timestamps.latestMessage && timestamps.latestMessage > 0) {
           lastActivityTime = timestamps.latestMessage;
@@ -128,7 +291,7 @@ export async function GET(request: NextRequest) {
           ageCalculationMethod = "fallback";
           isValidActivity = false;
         }
-      } else if (chatType === "group") {
+      } else if (chat.chat_type === "group") {
         // For group chats, consider both messages and group updates
         const messageTime = timestamps.latestMessage;
         const updateTime = timestamps.updatedAt;
@@ -160,8 +323,27 @@ export async function GET(request: NextRequest) {
           ageCalculationMethod = "fallback";
           isValidActivity = false;
         }
-      } else if (chatType === "business") {
+      } else if (chat.chat_type === "business") {
         // For business chats, prioritize customer interactions
+        if (timestamps.latestMessage && timestamps.latestMessage > 0) {
+          lastActivityTime = timestamps.latestMessage;
+          ageCalculationMethod = "latest_message";
+          isValidActivity = true;
+        } else if (timestamps.updatedAt && timestamps.updatedAt > 0) {
+          lastActivityTime = timestamps.updatedAt;
+          ageCalculationMethod = "updated_at";
+          isValidActivity = true;
+        } else if (timestamps.createdAt && timestamps.createdAt > 0) {
+          lastActivityTime = timestamps.createdAt;
+          ageCalculationMethod = "created_at";
+          isValidActivity = false;
+        } else {
+          lastActivityTime = currentTime - 60 * 60 * 1000;
+          ageCalculationMethod = "fallback";
+          isValidActivity = false;
+        }
+      } else {
+        // Default fallback for any other chat types
         if (timestamps.latestMessage && timestamps.latestMessage > 0) {
           lastActivityTime = timestamps.latestMessage;
           ageCalculationMethod = "latest_message";
@@ -218,9 +400,7 @@ export async function GET(request: NextRequest) {
         isValidActivity,
         memberCount: chat.member_count || 0,
         isAssigned: !!chat.assigned_to,
-        customProperty: customPropertyId
-          ? chat.custom_properties?.[customPropertyId]
-          : undefined,
+        orgPhone: chat.org_phone || null
       });
 
       // Enhanced delayed response detection
@@ -232,26 +412,21 @@ export async function GET(request: NextRequest) {
 
         // Chat type-specific delayed response logic
         let shouldConsiderDelayed = false;
+        let responseThreshold = twentyFourHoursMs; // Default threshold
 
-        if (chatType === "user") {
+        if (chat.chat_type === "user") {
           // For user chats, only consider delayed if customer sent the last message
-          shouldConsiderDelayed =
-            !chat.latest_message.from_me &&
-            timeSinceLastMessage >= twentyFourHoursMs;
-        } else if (chatType === "group") {
+          shouldConsiderDelayed = !chat.latest_message.from_me;
+        } else if (chat.chat_type === "group") {
           // For group chats, consider delayed if any member (not agent) sent the last message
-          shouldConsiderDelayed =
-            !chat.latest_message.from_me &&
-            timeSinceLastMessage >= twentyFourHoursMs;
-        } else if (chatType === "business") {
+          shouldConsiderDelayed = !chat.latest_message.from_me;
+        } else if (chat.chat_type === "business") {
           // For business chats, stricter criteria - customer messages need faster response
-          const businessResponseTime = 12 * 60 * 60 * 1000; // 12 hours for business
-          shouldConsiderDelayed =
-            !chat.latest_message.from_me &&
-            timeSinceLastMessage >= businessResponseTime;
+          responseThreshold = 12 * 60 * 60 * 1000; // 12 hours for business
+          shouldConsiderDelayed = !chat.latest_message.from_me;
         }
 
-        if (shouldConsiderDelayed) {
+        if (shouldConsiderDelayed && timeSinceLastMessage >= responseThreshold) {
           chatsWithDelayedResponse++;
           delayedResponseDetails.push({
             chatId: chat.chat_id,
@@ -263,18 +438,16 @@ export async function GET(request: NextRequest) {
             agentPhone: chat.assigned_to,
             lastMessageFromCustomer: !chat.latest_message.from_me,
             memberCount: chat.member_count || 0,
-            customProperty: customPropertyId
-              ? chat.custom_properties?.[customPropertyId]
-              : undefined,
+            orgPhone: chat.org_phone || null
           });
         }
       } else {
         // No latest message - consider as needing attention based on chat type
         let noMessageThreshold = twentyFourHoursMs;
 
-        if (chatType === "business") {
+        if (chat.chat_type === "business") {
           noMessageThreshold = 12 * 60 * 60 * 1000; // 12 hours for business
-        } else if (chatType === "group") {
+        } else if (chat.chat_type === "group") {
           noMessageThreshold = 48 * 60 * 60 * 1000; // 48 hours for groups (more flexible)
         }
 
@@ -291,9 +464,7 @@ export async function GET(request: NextRequest) {
             lastMessageFromCustomer: false,
             memberCount: chat.member_count || 0,
             reason: "no_messages",
-            customProperty: customPropertyId
-              ? chat.custom_properties?.[customPropertyId]
-              : undefined,
+            orgPhone: chat.org_phone || null
           });
         }
       }
@@ -325,18 +496,14 @@ export async function GET(request: NextRequest) {
       _debug: {
         periskopePhone: process.env.NEXT_PUBLIC_PERISKOPE_PHONE,
         hasApiKey: !!process.env.NEXT_PUBLIC_PERISKOPE_API_KEY,
-        totalChatsFound: allChats.length,
-        openChatsOfTypeFound: openChatsOfType.length,
+        totalChatsFound: chats.length,
         validActivityChats: validAgeCount,
-        chatTypeFilter: chatType,
-        agentPhonesChecked: agent ? [agent] : ["all"],
-        customPropertyFilter: customPropertyId
-          ? `${customPropertyId}=${customPropertyValue}`
-          : "none",
+        chatTypeFilter: filterType,
+        agentPhonesChecked: agent ? [agent] : ['all'],
         chatTypeDistribution: {
-          user: allChats.filter((c) => c.chat_type === "user").length,
-          group: allChats.filter((c) => c.chat_type === "group").length,
-          business: allChats.filter((c) => c.chat_type === "business").length,
+          user: chats.filter((c) => c.chat_type === "user").length,
+          group: chats.filter((c) => c.chat_type === "group").length,
+          business: chats.filter((c) => c.chat_type === "business").length,
         },
         delayedResponseThresholds: {
           user: "24 hours",
@@ -348,39 +515,58 @@ export async function GET(request: NextRequest) {
             business: "12 hours",
           },
         },
-        filterApplied: `${chatType}_only`,
-        timeFilter: {
-          startTime: startTimeISO,
-          endTime: endTimeISO,
-        }
+        timeFilter: timeFilter,
+        filterApplied: getFilterDescription(chatType, agent, orgPhone, filterOpen, timeFilter),
       },
     };
 
     console.log("[chat-analytics] robust chat metrics calculated:", {
       totalOpenChats: totalOpenChats,
       validActivityChats: validAgeCount,
-      chatType,
+      chatTypeDistribution: {
+        user: chats.filter((c) => c.chat_type === "user").length,
+        group: chats.filter((c) => c.chat_type === "group").length,
+        business: chats.filter((c) => c.chat_type === "business").length,
+      },
       averageAgeInHours,
       maxAgeInHours,
       chatsWithDelayedResponse,
-      customPropertyFilter: customPropertyId
-        ? `${customPropertyId}=${customPropertyValue}`
-        : "none",
-      delayedResponseLogic: {
-        user: "24h from customer message",
-        group: "24h from any member message",
-        business: "12h from customer message",
-      },
-      filterApplied: `${chatType}_only`,
-      timeRange: startTimeISO && endTimeISO ? `${startTimeISO} to ${endTimeISO}` : "all time",
+      timeFilter,
     });
 
     return NextResponse.json({ metrics });
-  } catch (error: any) {
-    console.error("[chat-analytics] error fetching chat metrics:", error);
-    return NextResponse.json(
-      { error: "Failed to fetch chat metrics", details: error.message },
-      { status: 500 }
-    );
+  }
+  
+  // Helper function to create a human-readable description of the filters applied
+  function getFilterDescription(chatType?: string, agent?: string, orgPhone?: string, filterOpen?: boolean, timeFilter?: string): string {
+    const filters: string[] = [];
+    
+    if (filterOpen) {
+      filters.push("open chats only");
+    }
+    
+    if (timeFilter && timeFilter !== "all") {
+      const timeLabels: Record<string, string> = {
+        day: "last 24 hours",
+        week: "last 7 days",
+        month: "last 30 days",
+      };
+      
+      filters.push(timeLabels[timeFilter] || timeFilter);
+    }
+    
+    if (chatType) {
+      filters.push(`chat type: ${chatType}`);
+    }
+    
+    if (agent) {
+      filters.push(`agent: ${agent.substring(0, 5)}...`);
+    }
+    
+    if (orgPhone) {
+      filters.push(`org phone: ${orgPhone.substring(0, 5)}...`);
+    }
+    
+    return filters.length > 0 ? filters.join(", ") : "none - showing all chats";
   }
 }

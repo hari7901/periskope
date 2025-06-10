@@ -6,7 +6,7 @@ import TimeFilter from "./components/time-filter";
 import DateRangePicker from "./components/date-range-picker";
 import HeatMap from "./components/heatmap";
 import ChatAnalytics from "./components/chat-analytics";
-import CustomPropertyChart from "./components/custom-property-chart";
+
 import {
   getDateRange,
   formatDateForAPI,
@@ -326,18 +326,7 @@ export default function Home() {
 
   const renderChatsTab = () => (
     <div className="space-y-8">
-      <ChatAnalytics
-        orgPhone={orgPhone}
-        agent={agent}
-        chatType={chatType}
-        customPropertyValue={customPropertyValue}
-      />
-
-      {/* Add the custom property distribution chart */}
-      <CustomPropertyChart
-        propertyId="property-mhpfkllsoayiisiq"
-        chatType={chatType}
-      />
+      <ChatAnalytics orgPhone={orgPhone} agent={agent} chatType={chatType} />
     </div>
   );
 

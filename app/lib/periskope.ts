@@ -3,9 +3,21 @@
 import { PeriskopeApi } from "@periskope/periskope-client";
 import type { Message, MessageData } from "./types/periskope";
 
+// Get API key and phone from environment variables with fallbacks
+const apiKey = process.env.NEXT_PUBLIC_PERISKOPE_API_KEY || "";
+const phone = process.env.NEXT_PUBLIC_PERISKOPE_PHONE || "";
+
+// Initialize the Periskope client with proper configuration
 export const periskopeClient = new PeriskopeApi({
-  authToken: process.env.NEXT_PUBLIC_PERISKOPE_API_KEY || "",
-  phone: process.env.NEXT_PUBLIC_PERISKOPE_PHONE || "",
+  authToken: apiKey,
+  phone: phone,
+});
+
+// Log configuration (without exposing sensitive data)
+console.log("[periskope-client] Initialized with:", {
+  hasApiKey: !!apiKey,
+  hasPhone: !!phone,
+  phonePrefix: phone ? phone.substring(0, 3) + "..." : "not set",
 });
 
 export type { Message, MessageData };

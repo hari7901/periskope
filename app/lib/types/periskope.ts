@@ -1,4 +1,3 @@
-// app/lib/types/periskope.ts
 export interface Message {
   message_id: string;
   chat_id: string;

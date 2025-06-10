@@ -8,8 +8,6 @@ export interface Filters {
   primaryKam: string;
   plan: string;
   country: string;
-  customKey: string;
-  customValue: string;
 }
 
 interface MessageFiltersProps {
@@ -54,20 +52,6 @@ const MessageFilters: React.FC<MessageFiltersProps> = ({
         value={filters.country}
         onChange={handleChange}
         placeholder="Country"
-        className="border rounded p-2"
-      />
-      <input
-        name="customKey"
-        value={filters.customKey}
-        onChange={handleChange}
-        placeholder="Custom Key"
-        className="border rounded p-2"
-      />
-      <input
-        name="customValue"
-        value={filters.customValue}
-        onChange={handleChange}
-        placeholder="Custom Value"
         className="border rounded p-2"
       />
     </div>

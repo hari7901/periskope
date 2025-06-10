@@ -1,4 +1,3 @@
-// app/components/chat-analytics.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -13,24 +12,23 @@ import {
   Calendar,
   User,
   Bot,
+  Search,
+  Filter,
 } from "lucide-react";
 import type { ChatMetrics } from "@/app/lib/types/periskope";
 import TimeFilter from "./time-filter";
-import DateRangePicker from "./date-range-picker";
-import { getDateRange, formatDateForAPI } from "@/app/lib/utils";
+import AgentFilter from "./agent-filter";
 
 interface ChatAnalyticsProps {
   orgPhone: string;
-  agent: string;
+  agent?: string; // Make this optional since we'll handle it with the filter
   chatType: string;
-  customPropertyValue?: string;
 }
 
 export default function ChatAnalytics({
   orgPhone,
-  agent,
+  agent: initialAgent = "",
   chatType,
-  customPropertyValue = "",
 }: ChatAnalyticsProps) {
   const [metrics, setMetrics] = useState<ChatMetrics | null>(null);
   const [loading, setLoading] = useState(true);
@@ -38,21 +36,24 @@ export default function ChatAnalytics({
     openChats: false,
     delayedChats: false,
   });
-
+  
   // Add time filter state
-  const [timeFilter, setTimeFilter] = useState<string>("last7days");
-  const [startDateISO, setStartDateISO] = useState("");
-  const [endDateISO, setEndDateISO] = useState("");
+  const [timeFilter, setTimeFilter] = useState<string>("week"); // Default to last 7 days
+  
+  // Add agent filter state
+  const [selectedAgent, setSelectedAgent] = useState<string>(initialAgent);
+  
+  // Add search and pagination state for open chats
+  const [openChatsSearch, setOpenChatsSearch] = useState("");
+  const [openChatsPage, setOpenChatsPage] = useState(1);
+  const [openChatsPerPage, setOpenChatsPerPage] = useState(50);
+  const [showAllOpenChats, setShowAllOpenChats] = useState(false);
 
-  const timePeriodLabels: Record<string, string> = {
-    today: "Today",
-    yesterday: "Yesterday",
-    last7days: "Last 7 Days",
-    last30days: "Last 30 Days",
-    thisMonth: "This Month",
-    lastMonth: "Last Month",
-    custom: "Custom Range",
-  };
+  // Add search and pagination state for delayed chats
+  const [delayedChatsSearch, setDelayedChatsSearch] = useState("");
+  const [delayedChatsPage, setDelayedChatsPage] = useState(1);
+  const [delayedChatsPerPage, setDelayedChatsPerPage] = useState(50);
+  const [showAllDelayedChats, setShowAllDelayedChats] = useState(false);
 
   const getChatTypeLabel = (type: string) => {
     switch (type) {
@@ -84,25 +85,37 @@ export default function ChatAnalytics({
   };
 
   const chatTypeInfo = getChatTypeLabel(chatType);
+  
+  // Get the time period label for the metric cards
+  const getTimePeriodLabel = () => {
+    switch (timeFilter) {
+      case "day":
+        return "Last 24 Hours";
+      case "week":
+        return "Last 7 Days";
+      case "month":
+        return "Last 30 Days";
+      case "all":
+      default:
+        return "All Time";
+    }
+  };
 
-  // Initialize time filter with last 7 days
-  useEffect(() => {
-    const { startDate, endDate } = getDateRange("last7days");
-    setStartDateISO(startDate.toISOString().slice(0, 10));
-    setEndDateISO(endDate.toISOString().slice(0, 10));
-  }, []);
+  // Get agent display name
+  const getAgentDisplayName = () => {
+    const agentMap: Record<string, string> = {
+      "+911852701495": "Agent 1 (+91 85270 14950)",
+      "+911852703388": "Agent 2 (+91 85270 33886)",
+      "+911730346174": "Agent 3 (+91 73034 61744)",
+      "+911852743922": "Agent 4 (+91 85274 39222)",
+    };
+    
+    return selectedAgent ? agentMap[selectedAgent] || selectedAgent : "All Agents";
+  };
 
   useEffect(() => {
     fetchChatMetrics();
-  }, [
-    orgPhone,
-    agent,
-    chatType,
-    customPropertyValue,
-    timeFilter,
-    startDateISO,
-    endDateISO,
-  ]);
+  }, [orgPhone, selectedAgent, chatType, timeFilter]); // Updated to use selectedAgent
 
   async function fetchChatMetrics() {
     setLoading(true);
@@ -113,42 +126,21 @@ export default function ChatAnalytics({
       if (orgPhone.trim()) {
         params.append("orgPhone", orgPhone.trim());
       }
-      if (agent) {
-        params.append("agent", agent);
+      if (selectedAgent) {
+        params.append("agent", selectedAgent);
       }
       if (chatType) {
         params.append("chatType", chatType);
       }
-      if (customPropertyValue) {
-        params.append("customPropertyId", "property-mhpfkllsoayiisiq");
-        params.append("customPropertyValue", customPropertyValue);
-      }
-
-      // Add time filter parameters
-      let startTime, endTime;
-      if (timeFilter === "custom") {
-        // Use the date picker values for custom date range
-        startTime = new Date(startDateISO);
-        endTime = new Date(endDateISO);
-        startTime.setHours(0, 0, 0, 0);
-        endTime.setHours(23, 59, 59, 999);
-      } else {
-        // Get date range for preset options
-        const { startDate, endDate } = getDateRange(timeFilter);
-        startTime = startDate;
-        endTime = endDate;
-      }
-
-      // Format dates for API
-      const startTimeISO = formatDateForAPI(startTime);
-      const endTimeISO = formatDateForAPI(endTime);
-
-      params.append("startTime", startTimeISO);
-      params.append("endTime", endTimeISO);
+      
+      // Add time filter parameter
+      params.append("timeFilter", timeFilter);
 
       if (params.toString()) {
         url += `?${params.toString()}`;
       }
+
+      console.log(`[ChatAnalytics] Fetching metrics for agent: ${getAgentDisplayName()}`);
 
       const res = await fetch(url);
       if (!res.ok) throw new Error(`API ${res.status}`);
@@ -307,6 +299,7 @@ export default function ChatAnalytics({
       </div>
     );
   };
+  
   const getChatCardClasses = (urgency: { color: string }) => {
     switch (urgency.color) {
       case "emerald":
@@ -370,6 +363,8 @@ export default function ChatAnalytics({
             <div className="flex items-center gap-2 mb-1">
               {chat.chatType === "group" ? (
                 <Users className="h-4 w-4 text-blue-500" />
+              ) : chat.chatType === "business" ? (
+                <Bot className="h-4 w-4 text-purple-500" />
               ) : (
                 <User className="h-4 w-4 text-green-500" />
               )}
@@ -386,12 +381,18 @@ export default function ChatAnalytics({
             <div className="flex items-center gap-4 text-sm text-gray-600 dark:text-gray-400">
               <div className="flex items-center gap-1">
                 <Bot className="h-3 w-3" />
-                <span>{chat.agentPhone || "Unassigned"}</span>
+                <span className="truncate max-w-[120px]">{chat.agentPhone || "Unassigned"}</span>
               </div>
               <div className="flex items-center gap-1">
                 <Calendar className="h-3 w-3" />
                 <span className="capitalize">{chat.chatType}</span>
               </div>
+              {chat.memberCount && chat.memberCount > 0 && (
+                <div className="flex items-center gap-1">
+                  <Users className="h-3 w-3" />
+                  <span>{chat.memberCount} members</span>
+                </div>
+              )}
             </div>
 
             {chat.lastActivity && (
@@ -405,7 +406,7 @@ export default function ChatAnalytics({
               </div>
             )}
 
-            {type === "delayed" && (
+            {type === "delayed" && chat.lastMessageTime && (
               <div className="mt-2 text-xs text-red-600 dark:text-red-400">
                 Customer waiting since:{" "}
                 {new Date(chat.lastMessageTime).toLocaleDateString()} at{" "}
@@ -415,6 +416,11 @@ export default function ChatAnalytics({
                 })}
               </div>
             )}
+
+            {/* Chat ID for debugging */}
+            <div className="mt-1 text-xs text-gray-400 dark:text-gray-500 font-mono">
+              ID: {chat.chatId}
+            </div>
           </div>
 
           <div className="flex flex-col items-end">
@@ -428,30 +434,86 @@ export default function ChatAnalytics({
     );
   };
 
-  // Time filter handling component
-  const TimeFilterSection = () => (
-    <div className="mb-6">
-      <TimeFilter
-        selectedFilter={timeFilter}
-        onFilterChange={(filter) => setTimeFilter(filter)}
-      />
-      <DateRangePicker
-        startDate={startDateISO}
-        endDate={endDateISO}
-        onStartDateChange={setStartDateISO}
-        onEndDateChange={setEndDateISO}
-        isVisible={timeFilter === "custom"}
-      />
-    </div>
-  );
+  // Filter open chats based on search
+  const getFilteredOpenChats = () => {
+    if (!metrics?.openChatDetails) return [];
+    
+    let filtered = metrics.openChatDetails;
+    
+    if (openChatsSearch.trim()) {
+      const searchTerm = openChatsSearch.toLowerCase();
+      filtered = filtered.filter(chat => 
+        chat.chatName.toLowerCase().includes(searchTerm) ||
+        chat.chatId.toLowerCase().includes(searchTerm) ||
+        (chat.agentPhone && chat.agentPhone.toLowerCase().includes(searchTerm)) ||
+        (chat.chatType && chat.chatType.toLowerCase().includes(searchTerm))
+      );
+    }
+    
+    return filtered;
+  };
+
+  // Get paginated open chats
+  const getPaginatedOpenChats = () => {
+    const filtered = getFilteredOpenChats();
+    
+    if (showAllOpenChats) {
+      return filtered;
+    }
+    
+    const startIndex = (openChatsPage - 1) * openChatsPerPage;
+    return filtered.slice(startIndex, startIndex + openChatsPerPage);
+  };
+
+  // Calculate pagination info for open chats
+  const getOpenChatsTotalPages = () => {
+    return Math.ceil(getFilteredOpenChats().length / openChatsPerPage);
+  };
+
+  // Filter delayed chats based on search
+  const getFilteredDelayedChats = () => {
+    if (!metrics?.delayedResponseDetails) return [];
+    
+    let filtered = metrics.delayedResponseDetails;
+    
+    if (delayedChatsSearch.trim()) {
+      const searchTerm = delayedChatsSearch.toLowerCase();
+      filtered = filtered.filter(chat => 
+        chat.chatName.toLowerCase().includes(searchTerm) ||
+        chat.chatId.toLowerCase().includes(searchTerm) ||
+        (chat.agentPhone && chat.agentPhone.toLowerCase().includes(searchTerm)) ||
+        (chat.chatType && chat.chatType.toLowerCase().includes(searchTerm))
+      );
+    }
+    
+    return filtered;
+  };
+
+  // Get paginated delayed chats
+  const getPaginatedDelayedChats = () => {
+    const filtered = getFilteredDelayedChats();
+    
+    if (showAllDelayedChats) {
+      return filtered;
+    }
+    
+    const startIndex = (delayedChatsPage - 1) * delayedChatsPerPage;
+    return filtered.slice(startIndex, startIndex + delayedChatsPerPage);
+  };
+
+  // Calculate pagination info for delayed chats
+  const getDelayedChatsTotalPages = () => {
+    return Math.ceil(getFilteredDelayedChats().length / delayedChatsPerPage);
+  };
 
   // Loading skeleton for the entire component
   if (loading) {
     return (
       <div className="space-y-8">
-        {/* Include time filter UI even during loading */}
-        <TimeFilterSection />
-
+        {/* Include filters even during loading */}
+        <TimeFilter selectedFilter={timeFilter} onFilterChange={setTimeFilter} />
+        <AgentFilter selectedAgent={selectedAgent} onAgentChange={setSelectedAgent} />
+        
         {/* Loading skeleton for metrics */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           {Array.from({ length: 4 }).map((_, i) => (
@@ -497,16 +559,17 @@ export default function ChatAnalytics({
   if (!metrics) {
     return (
       <div className="space-y-8">
-        {/* Include time filter UI even when there's an error */}
-        <TimeFilterSection />
-
+        {/* Include filters even when there's an error */}
+        <TimeFilter selectedFilter={timeFilter} onFilterChange={setTimeFilter} />
+        <AgentFilter selectedAgent={selectedAgent} onAgentChange={setSelectedAgent} />
+        
         <div className="flex flex-col items-center justify-center py-16 text-center">
           <AlertTriangle className="h-16 w-16 text-red-500 mb-4" />
           <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">
             Failed to Load Chat Metrics
           </h3>
           <p className="text-gray-600 dark:text-gray-400 mb-4">
-            We couldn't fetch the chat analytics data. Please check your
+            We couldn't fetch the chat analytics data for {getAgentDisplayName()}. Please check your
             connection and try again.
           </p>
           <button
@@ -520,18 +583,29 @@ export default function ChatAnalytics({
     );
   }
 
+  const filteredOpenChats = getFilteredOpenChats();
+  const paginatedOpenChats = getPaginatedOpenChats();
+  const openChatsTotalPages = getOpenChatsTotalPages();
+
+  const filteredDelayedChats = getFilteredDelayedChats();
+  const paginatedDelayedChats = getPaginatedDelayedChats();
+  const delayedChatsTotalPages = getDelayedChatsTotalPages();
+
   return (
     <div className="space-y-8">
-      {/* Time filter UI */}
-      <TimeFilterSection />
-
+      {/* Filter Controls */}
+      <div className="space-y-6">
+        <TimeFilter selectedFilter={timeFilter} onFilterChange={setTimeFilter} />
+        <AgentFilter selectedAgent={selectedAgent} onAgentChange={setSelectedAgent} />
+      </div>
+      
       {/* Metrics Overview */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <MetricCard
           icon={MessageCircle}
           title={`Open ${chatTypeInfo.plural}`}
           value={metrics.totalOpenChats}
-          subtitle={`${timePeriodLabels[timeFilter]}`}
+          subtitle={`${getTimePeriodLabel()} - ${getAgentDisplayName()}`}
           type="count"
         />
 
@@ -560,34 +634,14 @@ export default function ChatAnalytics({
         />
       </div>
 
-      {/* Filter Badge for Custom Property */}
-      {customPropertyValue && (
-        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-3 flex items-center">
-          <div className="flex-1">
-            <span className="text-blue-700 dark:text-blue-300 font-medium">
-              Custom Property Filter:
-            </span>
-            <span className="ml-2 text-blue-800 dark:text-blue-200">
-              {customPropertyValue}
-            </span>
-          </div>
-        </div>
-      )}
-
-      {/* Time Period Badge */}
-      <div className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-lg p-3 flex items-center">
+      {/* Current Filters Badge */}
+      <div className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-lg p-3 flex items-center justify-between">
         <div className="flex-1">
           <span className="text-gray-700 dark:text-gray-300 font-medium">
-            Time Period:
+            Showing:
           </span>
           <span className="ml-2 text-gray-800 dark:text-gray-200">
-            {timePeriodLabels[timeFilter]}
-            {timeFilter === "custom" && (
-              <>
-                {" "}
-                ({startDateISO} to {endDateISO})
-              </>
-            )}
+            {getTimePeriodLabel()} • {getAgentDisplayName()} • {chatTypeInfo.plural}
           </span>
         </div>
       </div>
@@ -598,7 +652,7 @@ export default function ChatAnalytics({
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border overflow-hidden">
           <button
             onClick={() => toggleSection("openChats")}
-            className="w-full p-6 text-left border-b border-gray-200 dark:border-gray-700 transition-colors"
+            className="w-full p-6 text-left border-b border-gray-200 dark:border-gray-700 transition-colors hover:bg-gray-50 dark:hover:bg-gray-750"
           >
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -624,24 +678,112 @@ export default function ChatAnalytics({
                 <div className="text-center py-12">
                   <MessageCircle className="h-12 w-12 text-gray-400 mx-auto mb-4" />
                   <p className="text-gray-500 dark:text-gray-400">
-                    No open {chatType} chats found in this time period
+                    No open {chatType} chats found for {getAgentDisplayName()} in this time period
                   </p>
                 </div>
               ) : (
-                <div className="space-y-4 max-h-96 overflow-y-auto">
-                  {metrics.openChatDetails.slice(0, 20).map((chat, index) => (
-                    <ChatCard
-                      key={`open-${index}`}
-                      chat={chat}
-                      index={index}
-                      type="open"
-                    />
-                  ))}
-                  {metrics.openChatDetails.length > 20 && (
-                    <div className="text-center pt-4">
-                      <p className="text-sm text-gray-500 dark:text-gray-400">
-                        ... and {metrics.openChatDetails.length - 20} more chats
-                      </p>
+                <div className="space-y-4">
+                  {/* Search and Controls */}
+                  <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
+                    <div className="relative flex-1 max-w-md">
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+                      <input
+                        type="text"
+                        placeholder="Search chats..."
+                        value={openChatsSearch}
+                        onChange={(e) => {
+                          setOpenChatsSearch(e.target.value);
+                          setOpenChatsPage(1); // Reset to first page when searching
+                        }}
+                        className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                    </div>
+                    
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setShowAllOpenChats(!showAllOpenChats)}
+                        className={`px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
+                          showAllOpenChats
+                            ? "bg-blue-600 text-white"
+                            : "bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+                        }`}
+                      >
+                        {showAllOpenChats ? "Show Paginated" : "Show All"}
+                      </button>
+                      
+                      {!showAllOpenChats && (
+                        <select
+                          value={openChatsPerPage}
+                          onChange={(e) => {
+                            setOpenChatsPerPage(Number(e.target.value));
+                            setOpenChatsPage(1);
+                          }}
+                          className="px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                        >
+                          <option value={25}>25 per page</option>
+                          <option value={50}>50 per page</option>
+                          <option value={100}>100 per page</option>
+                        </select>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Results Info */}
+                  <div className="text-sm text-gray-600 dark:text-gray-400">
+                    {openChatsSearch.trim() ? (
+                      <>
+                        Showing {filteredOpenChats.length} of {metrics.openChatDetails.length} chats
+                        {filteredOpenChats.length !== metrics.openChatDetails.length && (
+                          <span className="ml-2 text-blue-600 dark:text-blue-400">
+                            (filtered by "{openChatsSearch}")
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        {showAllOpenChats ? (
+                          `Showing all ${filteredOpenChats.length} chats`
+                        ) : (
+                          `Showing ${Math.min(openChatsPerPage, filteredOpenChats.length)} of ${filteredOpenChats.length} chats`
+                        )}
+                      </>
+                    )}
+                  </div>
+
+                  {/* Chat List */}
+                  <div className="space-y-4 max-h-96 overflow-y-auto">
+                    {paginatedOpenChats.map((chat, index) => (
+                      <ChatCard
+                        key={`open-${chat.chatId}-${index}`}
+                        chat={chat}
+                        index={index}
+                        type="open"
+                      />
+                    ))}
+                  </div>
+
+                  {/* Pagination */}
+                  {!showAllOpenChats && openChatsTotalPages > 1 && (
+                    <div className="flex items-center justify-between pt-4">
+                      <div className="text-sm text-gray-600 dark:text-gray-400">
+                        Page {openChatsPage} of {openChatsTotalPages}
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => setOpenChatsPage(Math.max(1, openChatsPage - 1))}
+                          disabled={openChatsPage === 1}
+                          className="px-3 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-600"
+                        >
+                          Previous
+                        </button>
+                        <button
+                          onClick={() => setOpenChatsPage(Math.min(openChatsTotalPages, openChatsPage + 1))}
+                          disabled={openChatsPage === openChatsTotalPages}
+                          className="px-3 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-600"
+                        >
+                          Next
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -654,7 +796,7 @@ export default function ChatAnalytics({
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border overflow-hidden">
           <button
             onClick={() => toggleSection("delayedChats")}
-            className="w-full p-6 text-left border-b border-gray-200 dark:border-gray-700 transition-colors"
+            className="w-full p-6 text-left border-b border-gray-200 dark:border-gray-700 transition-colors hover:bg-gray-50 dark:hover:bg-gray-750"
           >
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -691,21 +833,114 @@ export default function ChatAnalytics({
                     All Caught Up!
                   </h4>
                   <p className="text-green-600 dark:text-green-500">
-                    No delayed responses during{" "}
-                    {timePeriodLabels[timeFilter].toLowerCase()}. Great job
-                    keeping up with customer inquiries!
+                    No delayed responses for {getAgentDisplayName()} during {getTimePeriodLabel().toLowerCase()}. Great job keeping up with customer inquiries!
                   </p>
                 </div>
               ) : (
-                <div className="space-y-4 max-h-96 overflow-y-auto">
-                  {metrics.delayedResponseDetails.map((chat, index) => (
-                    <ChatCard
-                      key={`delayed-${index}`}
-                      chat={chat}
-                      index={index}
-                      type="delayed"
-                    />
-                  ))}
+                <div className="space-y-4">
+                  {/* Search and Controls for Delayed Chats */}
+                  <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
+                    <div className="relative flex-1 max-w-md">
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+                      <input
+                        type="text"
+                        placeholder="Search delayed chats..."
+                        value={delayedChatsSearch}
+                        onChange={(e) => {
+                          setDelayedChatsSearch(e.target.value);
+                          setDelayedChatsPage(1); // Reset to first page when searching
+                        }}
+                        className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                    </div>
+                    
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setShowAllDelayedChats(!showAllDelayedChats)}
+                        className={`px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
+                          showAllDelayedChats
+                            ? "bg-red-600 text-white"
+                            : "bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+                        }`}
+                      >
+                        {showAllDelayedChats ? "Show Paginated" : "Show All"}
+                      </button>
+                      
+                      {!showAllDelayedChats && (
+                        <select
+                          value={delayedChatsPerPage}
+                          onChange={(e) => {
+                            setDelayedChatsPerPage(Number(e.target.value));
+                            setDelayedChatsPage(1);
+                          }}
+                          className="px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                        >
+                          <option value={25}>25 per page</option>
+                          <option value={50}>50 per page</option>
+                          <option value={100}>100 per page</option>
+                        </select>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Results Info for Delayed Chats */}
+                  <div className="text-sm text-gray-600 dark:text-gray-400">
+                    {delayedChatsSearch.trim() ? (
+                      <>
+                        Showing {filteredDelayedChats.length} of {metrics.delayedResponseDetails.length} delayed chats
+                        {filteredDelayedChats.length !== metrics.delayedResponseDetails.length && (
+                          <span className="ml-2 text-red-600 dark:text-red-400">
+                            (filtered by "{delayedChatsSearch}")
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        {showAllDelayedChats ? (
+                          `Showing all ${filteredDelayedChats.length} delayed chats`
+                        ) : (
+                          `Showing ${Math.min(delayedChatsPerPage, filteredDelayedChats.length)} of ${filteredDelayedChats.length} delayed chats`
+                        )}
+                      </>
+                    )}
+                  </div>
+
+                  {/* Delayed Chat List */}
+                  <div className="space-y-4 max-h-96 overflow-y-auto">
+                    {paginatedDelayedChats.map((chat, index) => (
+                      <ChatCard
+                        key={`delayed-${chat.chatId}-${index}`}
+                        chat={chat}
+                        index={index}
+                        type="delayed"
+                      />
+                    ))}
+                  </div>
+
+                  {/* Pagination for Delayed Chats */}
+                  {!showAllDelayedChats && delayedChatsTotalPages > 1 && (
+                    <div className="flex items-center justify-between pt-4">
+                      <div className="text-sm text-gray-600 dark:text-gray-400">
+                        Page {delayedChatsPage} of {delayedChatsTotalPages}
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => setDelayedChatsPage(Math.max(1, delayedChatsPage - 1))}
+                          disabled={delayedChatsPage === 1}
+                          className="px-3 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-600"
+                        >
+                          Previous
+                        </button>
+                        <button
+                          onClick={() => setDelayedChatsPage(Math.min(delayedChatsTotalPages, delayedChatsPage + 1))}
+                          disabled={delayedChatsPage === delayedChatsTotalPages}
+                          className="px-3 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-600"
+                        >
+                          Next
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
