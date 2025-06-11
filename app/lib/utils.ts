@@ -12,6 +12,7 @@ export function getDateRange(period: string): {
   switch (period) {
     case "today":
       startDate.setHours(0, 0, 0, 0);
+      endDate.setHours(23, 59, 59, 999);
       break;
     case "yesterday":
       startDate.setDate(now.getDate() - 1);
@@ -20,17 +21,24 @@ export function getDateRange(period: string): {
       endDate.setHours(23, 59, 59, 999);
       break;
     case "last7days":
-      startDate.setDate(now.getDate() - 6);
+      startDate.setDate(now.getDate() - 6); // Last 7 days including today
       startDate.setHours(0, 0, 0, 0);
+      endDate.setHours(23, 59, 59, 999);
       break;
-    case "last30days":
-      startDate.setDate(now.getDate() - 29);
+    case "lastMonth":
+      startDate.setDate(now.getDate() - 29); // Last 30 days including today
       startDate.setHours(0, 0, 0, 0);
+      endDate.setHours(23, 59, 59, 999);
+      break;
+    case "last3months":
+      startDate.setDate(now.getDate() - 89); // Last 90 days including today
+      startDate.setHours(0, 0, 0, 0);
+      endDate.setHours(23, 59, 59, 999);
       break;
     case "thisMonth":
       startDate = new Date(now.getFullYear(), now.getMonth(), 1);
       break;
-    case "lastMonth":
+    case "lastCalendarMonth":
       startDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
       endDate = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
       break;
@@ -38,6 +46,7 @@ export function getDateRange(period: string): {
       // Default to last 7 days
       startDate.setDate(now.getDate() - 6);
       startDate.setHours(0, 0, 0, 0);
+      endDate.setHours(23, 59, 59, 999);
   }
 
   return { startDate, endDate };
@@ -237,7 +246,7 @@ export function businessHoursDifference(start: Date, end: Date): number {
  * Given a mixed list of messages, pairs each customer→next agent reply,
  * returns average absolute and business‑hours delay in ms.
  */
-export function computeAverageReplyDelay(messages: Message[]): {
+export function computeAverageReplyDelay(messages: any[]): {
   avgAbsoluteMs: number;
   avgBusinessMs: number;
 } {
@@ -249,7 +258,7 @@ export function computeAverageReplyDelay(messages: Message[]): {
   const deltasAbs: number[] = [];
   const deltasBiz: number[] = [];
 
-  let lastCustomer: Message | null = null;
+  let lastCustomer: any | null = null;
   for (const msg of sorted) {
     if (!msg.from_me) {
       // customer

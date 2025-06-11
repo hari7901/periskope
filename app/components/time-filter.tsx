@@ -1,3 +1,4 @@
+// app/components/time-filter.tsx
 "use client";
 
 import React from "react";
@@ -12,10 +13,11 @@ const TimeFilter: React.FC<TimeFilterProps> = ({
   selectedFilter,
 }) => {
   const timeFilters = [
-    { id: "day", label: "Last 24 Hours" },
-    { id: "week", label: "Last 7 Days" },
-    { id: "month", label: "Last 30 Days" },
-    { id: "all", label: "All Time" },
+    { id: "today", label: "Today" },
+    { id: "last7days", label: "Last 7 Days" },
+    { id: "lastMonth", label: "Last Month" },
+    { id: "last3months", label: "Last 3 Months" },
+    { id: "custom", label: "Custom Range" },
   ];
 
   return (

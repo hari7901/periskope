@@ -13,35 +13,20 @@ import {
   User,
   Bot,
   Search,
-  Filter,
 } from "lucide-react";
 import type { ChatMetrics } from "@/app/lib/types/periskope";
-import TimeFilter from "./time-filter";
-import AgentFilter from "./agent-filter";
 
 interface ChatAnalyticsProps {
   orgPhone: string;
-  agent?: string; // Make this optional since we'll handle it with the filter
-  chatType: string;
 }
 
-export default function ChatAnalytics({
-  orgPhone,
-  agent: initialAgent = "",
-  chatType,
-}: ChatAnalyticsProps) {
+export default function ChatAnalytics({ orgPhone }: ChatAnalyticsProps) {
   const [metrics, setMetrics] = useState<ChatMetrics | null>(null);
   const [loading, setLoading] = useState(true);
   const [expandedSections, setExpandedSections] = useState({
     openChats: false,
     delayedChats: false,
   });
-  
-  // Add time filter state
-  const [timeFilter, setTimeFilter] = useState<string>("week"); // Default to last 7 days
-  
-  // Add agent filter state
-  const [selectedAgent, setSelectedAgent] = useState<string>(initialAgent);
   
   // Add search and pagination state for open chats
   const [openChatsSearch, setOpenChatsSearch] = useState("");
@@ -55,67 +40,9 @@ export default function ChatAnalytics({
   const [delayedChatsPerPage, setDelayedChatsPerPage] = useState(50);
   const [showAllDelayedChats, setShowAllDelayedChats] = useState(false);
 
-  const getChatTypeLabel = (type: string) => {
-    switch (type) {
-      case "user":
-        return {
-          single: "User Chat",
-          plural: "User Chats",
-          description: "Individual Conversations",
-        };
-      case "group":
-        return {
-          single: "Group Chat",
-          plural: "Group Chats",
-          description: "Group Conversations",
-        };
-      case "business":
-        return {
-          single: "Business Chat",
-          plural: "Business Chats",
-          description: "Business Conversations",
-        };
-      default:
-        return {
-          single: "Chat",
-          plural: "Chats",
-          description: "Conversations",
-        };
-    }
-  };
-
-  const chatTypeInfo = getChatTypeLabel(chatType);
-  
-  // Get the time period label for the metric cards
-  const getTimePeriodLabel = () => {
-    switch (timeFilter) {
-      case "day":
-        return "Last 24 Hours";
-      case "week":
-        return "Last 7 Days";
-      case "month":
-        return "Last 30 Days";
-      case "all":
-      default:
-        return "All Time";
-    }
-  };
-
-  // Get agent display name
-  const getAgentDisplayName = () => {
-    const agentMap: Record<string, string> = {
-      "+911852701495": "Agent 1 (+91 85270 14950)",
-      "+911852703388": "Agent 2 (+91 85270 33886)",
-      "+911730346174": "Agent 3 (+91 73034 61744)",
-      "+911852743922": "Agent 4 (+91 85274 39222)",
-    };
-    
-    return selectedAgent ? agentMap[selectedAgent] || selectedAgent : "All Agents";
-  };
-
   useEffect(() => {
     fetchChatMetrics();
-  }, [orgPhone, selectedAgent, chatType, timeFilter]); // Updated to use selectedAgent
+  }, [orgPhone]);
 
   async function fetchChatMetrics() {
     setLoading(true);
@@ -126,21 +53,12 @@ export default function ChatAnalytics({
       if (orgPhone.trim()) {
         params.append("orgPhone", orgPhone.trim());
       }
-      if (selectedAgent) {
-        params.append("agent", selectedAgent);
-      }
-      if (chatType) {
-        params.append("chatType", chatType);
-      }
-      
-      // Add time filter parameter
-      params.append("timeFilter", timeFilter);
 
       if (params.toString()) {
         url += `?${params.toString()}`;
       }
 
-      console.log(`[ChatAnalytics] Fetching metrics for agent: ${getAgentDisplayName()}`);
+      console.log(`[ChatAnalytics] Fetching metrics for orgPhone: ${orgPhone || 'all'}`);
 
       const res = await fetch(url);
       if (!res.ok) throw new Error(`API ${res.status}`);
@@ -174,7 +92,17 @@ export default function ChatAnalytics({
     }
   };
 
-  const getUrgencyLevel = (hours: number) => {
+  const getUrgencyLevel = (hours: number, urgency?: string) => {
+    if (urgency) {
+      switch (urgency) {
+        case "critical": return { level: "critical", color: "red", label: "Critical" };
+        case "high": return { level: "high", color: "orange", label: "High" };
+        case "medium": return { level: "medium", color: "yellow", label: "Medium" };
+        default: return { level: "low", color: "emerald", label: "Low" };
+      }
+    }
+    
+    // Fallback to hour-based logic
     if (hours < 2) return { level: "low", color: "emerald", label: "Fresh" };
     if (hours < 8) return { level: "medium", color: "yellow", label: "Active" };
     if (hours < 24) return { level: "high", color: "orange", label: "Aging" };
@@ -347,7 +275,8 @@ export default function ChatAnalytics({
     type: "open" | "delayed";
   }) => {
     const urgency = getUrgencyLevel(
-      type === "delayed" ? chat.hoursWithoutResponse : chat.ageInHours
+      type === "delayed" ? chat.hoursWithoutResponse : chat.ageInHours,
+      chat.urgencyLevel
     );
     const hours =
       type === "delayed" ? chat.hoursWithoutResponse : chat.ageInHours;
@@ -408,7 +337,7 @@ export default function ChatAnalytics({
 
             {type === "delayed" && chat.lastMessageTime && (
               <div className="mt-2 text-xs text-red-600 dark:text-red-400">
-                Customer waiting since:{" "}
+                {chat.lastMessageFromCustomer ? "Customer waiting since:" : "Last message:"}{" "}
                 {new Date(chat.lastMessageTime).toLocaleDateString()} at{" "}
                 {new Date(chat.lastMessageTime).toLocaleTimeString([], {
                   hour: "2-digit",
@@ -510,10 +439,6 @@ export default function ChatAnalytics({
   if (loading) {
     return (
       <div className="space-y-8">
-        {/* Include filters even during loading */}
-        <TimeFilter selectedFilter={timeFilter} onFilterChange={setTimeFilter} />
-        <AgentFilter selectedAgent={selectedAgent} onAgentChange={setSelectedAgent} />
-        
         {/* Loading skeleton for metrics */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           {Array.from({ length: 4 }).map((_, i) => (
@@ -559,17 +484,13 @@ export default function ChatAnalytics({
   if (!metrics) {
     return (
       <div className="space-y-8">
-        {/* Include filters even when there's an error */}
-        <TimeFilter selectedFilter={timeFilter} onFilterChange={setTimeFilter} />
-        <AgentFilter selectedAgent={selectedAgent} onAgentChange={setSelectedAgent} />
-        
         <div className="flex flex-col items-center justify-center py-16 text-center">
           <AlertTriangle className="h-16 w-16 text-red-500 mb-4" />
           <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">
             Failed to Load Chat Metrics
           </h3>
           <p className="text-gray-600 dark:text-gray-400 mb-4">
-            We couldn't fetch the chat analytics data for {getAgentDisplayName()}. Please check your
+            We couldn't fetch the chat analytics data. Please check your
             connection and try again.
           </p>
           <button
@@ -593,19 +514,13 @@ export default function ChatAnalytics({
 
   return (
     <div className="space-y-8">
-      {/* Filter Controls */}
-      <div className="space-y-6">
-        <TimeFilter selectedFilter={timeFilter} onFilterChange={setTimeFilter} />
-        <AgentFilter selectedAgent={selectedAgent} onAgentChange={setSelectedAgent} />
-      </div>
-      
       {/* Metrics Overview */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <MetricCard
           icon={MessageCircle}
-          title={`Open ${chatTypeInfo.plural}`}
+          title="Open Chats"
           value={metrics.totalOpenChats}
-          subtitle={`${getTimePeriodLabel()} - ${getAgentDisplayName()}`}
+          subtitle="Active conversations"
           type="count"
         />
 
@@ -627,21 +542,21 @@ export default function ChatAnalytics({
 
         <MetricCard
           icon={AlertTriangle}
-          title="Overdue"
+          title="Need Response"
           value={metrics.chatsWithDelayedResponse}
-          subtitle="24+ Hours Without Reply"
+          subtitle="Overdue Conversations"
           type="delayed"
         />
       </div>
 
-      {/* Current Filters Badge */}
+      {/* Current Status Badge */}
       <div className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-lg p-3 flex items-center justify-between">
         <div className="flex-1">
           <span className="text-gray-700 dark:text-gray-300 font-medium">
             Showing:
           </span>
           <span className="ml-2 text-gray-800 dark:text-gray-200">
-            {getTimePeriodLabel()} • {getAgentDisplayName()} • {chatTypeInfo.plural}
+            All Open Chats {orgPhone ? `• ${orgPhone}` : '• All Organizations'}
           </span>
         </div>
       </div>
@@ -658,7 +573,7 @@ export default function ChatAnalytics({
               <div className="flex items-center gap-3">
                 <MessageCircle className="h-5 w-5 text-blue-600 dark:text-blue-400" />
                 <h3 className="text-lg font-bold text-gray-900 dark:text-gray-100">
-                  Open {chatTypeInfo.plural}
+                  Open Chats
                 </h3>
                 <span className="inline-flex items-center rounded-full bg-blue-100 px-3 py-1 text-sm font-medium text-blue-800 dark:bg-blue-800/30 dark:text-blue-200">
                   {metrics.openChatDetails.length}
@@ -678,7 +593,7 @@ export default function ChatAnalytics({
                 <div className="text-center py-12">
                   <MessageCircle className="h-12 w-12 text-gray-400 mx-auto mb-4" />
                   <p className="text-gray-500 dark:text-gray-400">
-                    No open {chatType} chats found for {getAgentDisplayName()} in this time period
+                    No open chats found
                   </p>
                 </div>
               ) : (
@@ -833,7 +748,7 @@ export default function ChatAnalytics({
                     All Caught Up!
                   </h4>
                   <p className="text-green-600 dark:text-green-500">
-                    No delayed responses for {getAgentDisplayName()} during {getTimePeriodLabel().toLowerCase()}. Great job keeping up with customer inquiries!
+                    No delayed responses found. Great job keeping up with customer inquiries!
                   </p>
                 </div>
               ) : (
