@@ -23,7 +23,6 @@ export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams;
   const orgPhone = params.get("orgPhone") ?? undefined;
   
-  // Fixed agent number - only fetch data for this specific agent
   const specificAgent = "+911852701495"; // +91 85270 14950
   
   console.log("[chat-analytics] fetching chats for specific agent:", specificAgent);
@@ -33,19 +32,14 @@ export async function GET(request: NextRequest) {
     // Fetch all chats and filter for open ones
     const allChats = await fetchAllChats();
     
-    // First, let's see how many chats this agent has in total (before open filter)
-    const agentChatsBeforeFilter = filterBySpecificAgent(allChats, specificAgent);
-    console.log(`[chat-analytics] agent ${specificAgent} has ${agentChatsBeforeFilter.length} total chats (before open filter)`);
-    
+    console.log(`[chat-analytics] found ${allChats.length} total chats`);
+
+    // First filter for open chats
     const openChats = filterOpenChats(allChats);
-    
     console.log(`[chat-analytics] found ${openChats.length} open chats out of ${allChats.length} total chats`);
 
-    // Filter by the specific agent only
-    let filteredChats = filterBySpecificAgent(openChats, specificAgent);
-    console.log(`[chat-analytics] after agent filter: ${filteredChats.length} chats for agent ${specificAgent}`);
-
-    // Filter by orgPhone if specified
+    // Filter by orgPhone if specified (this is the main filter for now)
+    let filteredChats = openChats;
     if (orgPhone) {
       const orgPhoneWithoutSuffix = orgPhone.replace('@c.us', '');
       const orgPhoneWithSuffix = orgPhone.includes('@c.us') ? orgPhone : `${orgPhone}@c.us`;
@@ -58,15 +52,19 @@ export async function GET(request: NextRequest) {
       console.log(`[chat-analytics] after orgPhone filter: ${filteredChats.length} chats`);
     }
 
+    // For now, show all group chats (since the agent filter isn't working as expected)
+    // TODO: Implement proper agent filtering based on actual chat membership or assignment logic
+    const groupChats = filteredChats.filter(chat => chat.chat_type === 'group');
+    console.log(`[chat-analytics] showing ${groupChats.length} group chats (agent filtering temporarily disabled)`);
+
     // Display chat type distribution
     const userChats = filteredChats.filter(chat => chat.chat_type === 'user').length;
-    const groupChats = filteredChats.filter(chat => chat.chat_type === 'group').length;
     const businessChats = filteredChats.filter(chat => chat.chat_type === 'business').length;
     
-    console.log(`[chat-analytics] final chat distribution: user=${userChats}, group=${groupChats}, business=${businessChats}`);
+    console.log(`[chat-analytics] final chat distribution: groups=${groupChats.length}, users=${userChats}, business=${businessChats}`);
 
-    // Process the filtered chats
-    return processChats(filteredChats, specificAgent);
+    // Process the filtered chats (using group chats for now)
+    return processChats(groupChats, specificAgent);
     
   } catch (error: any) {
     console.error("[chat-analytics] error fetching chat metrics:", error);
@@ -89,14 +87,15 @@ async function fetchAllChats(): Promise<Chat[]> {
   const limit = 1000;
   let pageCount = 0;
   
-  while (hasMoreChats && pageCount < 15) { // Increased safety limit
+  while (hasMoreChats && pageCount < 15) { // Safety limit
     pageCount++;
     console.log(`[chat-analytics] fetching page ${pageCount} (offset: ${offset})`);
     
     try {
       const response = await periskopeClient.chat.getChats({
         limit,
-        offset
+        offset,
+        chat_type: 'group' // Only fetch group chats to optimize
       });
       
       const chats: Chat[] = response.data?.chats || [];
@@ -133,169 +132,114 @@ async function fetchAllChats(): Promise<Chat[]> {
   return uniqueChats;
 }
 
-// Filter chats by the specific agent: +91 85270 14950
-function filterBySpecificAgent(chats: Chat[], specificAgent: string): Chat[] {
-  // Convert the specific agent number to all possible formats
-  const agentFormats = [
-    specificAgent, // "+911852701495"
-    specificAgent.replace('+', ''), // "911852701495"
-    specificAgent.slice(3), // "1852701495" (remove +91)
-    specificAgent.slice(1), // "911852701495" (remove +)
-    "918527014950", // International format without +
-    "+918527014950", // International format with +
-    "918527014950@c.us", // WhatsApp format
-    "8527014950", // Local format
-    "85270 14950", // Formatted display
-    "852-701-4950", // Dash format
-    "852 701 4950", // Space format
-  ];
-
-  console.log("[chat-analytics] looking for agent in formats:", agentFormats);
-
-  let matchedChats = 0;
-  const matchDetails: string[] = [];
-
-  const filteredChats = chats.filter(chat => {
-    let matched = false;
-    let matchedField = '';
-
-    // Check org_phone (primary filter)
-    if (chat.org_phone && !matched) {
-      const cleanOrgPhone = chat.org_phone.replace(/@c\.us/g, '').replace(/\+/g, '').replace(/[\s-]/g, '');
-      if (agentFormats.some(format => {
-        const cleanFormat = format.replace(/@c\.us/g, '').replace(/\+/g, '').replace(/[\s-]/g, '');
-        return cleanOrgPhone === cleanFormat || 
-               cleanOrgPhone.endsWith(cleanFormat) ||
-               cleanFormat.endsWith(cleanOrgPhone) ||
-               cleanOrgPhone.includes(cleanFormat) ||
-               cleanFormat.includes(cleanOrgPhone);
-      })) {
-        matched = true;
-        matchedField = `org_phone: ${chat.org_phone}`;
-      }
-    }
-
-    // Check chat_org_phones array
-    if (chat.chat_org_phones && chat.chat_org_phones.length > 0 && !matched) {
-      const hasAgentInOrgPhones = chat.chat_org_phones.some(phone => {
-        const cleanPhone = phone.replace(/@c\.us/g, '').replace(/\+/g, '').replace(/[\s-]/g, '');
-        return agentFormats.some(format => {
-          const cleanFormat = format.replace(/@c\.us/g, '').replace(/\+/g, '').replace(/[\s-]/g, '');
-          return cleanPhone === cleanFormat || 
-                 cleanPhone.endsWith(cleanFormat) ||
-                 cleanFormat.endsWith(cleanPhone) ||
-                 cleanPhone.includes(cleanFormat) ||
-                 cleanFormat.includes(cleanPhone);
-        });
-      });
-      if (hasAgentInOrgPhones) {
-        matched = true;
-        matchedField = `chat_org_phones: ${chat.chat_org_phones.join(', ')}`;
-      }
-    }
-
-    // Check assigned_to
-    if (chat.assigned_to && !matched) {
-      const cleanAssigned = chat.assigned_to.replace(/@c\.us/g, '').replace(/\+/g, '').replace(/[\s-]/g, '');
-      if (agentFormats.some(format => {
-        const cleanFormat = format.replace(/@c\.us/g, '').replace(/\+/g, '').replace(/[\s-]/g, '');
-        return cleanAssigned === cleanFormat ||
-               cleanAssigned.endsWith(cleanFormat) ||
-               cleanFormat.endsWith(cleanAssigned) ||
-               cleanAssigned.includes(cleanFormat) ||
-               cleanFormat.includes(cleanAssigned);
-      })) {
-        matched = true;
-        matchedField = `assigned_to: ${chat.assigned_to}`;
-      }
-    }
-
-    // Check latest_message sender_phone
-    if (chat.latest_message?.sender_phone && !matched) {
-      const cleanSender = chat.latest_message.sender_phone.replace(/@c\.us/g, '').replace(/\+/g, '').replace(/[\s-]/g, '');
-      if (agentFormats.some(format => {
-        const cleanFormat = format.replace(/@c\.us/g, '').replace(/\+/g, '').replace(/[\s-]/g, '');
-        return cleanSender === cleanFormat ||
-               cleanSender.endsWith(cleanFormat) ||
-               cleanFormat.endsWith(cleanSender) ||
-               cleanSender.includes(cleanFormat) ||
-               cleanFormat.includes(cleanSender);
-      })) {
-        matched = true;
-        matchedField = `latest_message.sender_phone: ${chat.latest_message.sender_phone}`;
-      }
-    }
-
-    if (matched) {
-      matchedChats++;
-      matchDetails.push(`${chat.chat_name} (${chat.chat_type}) - matched on ${matchedField}`);
-    }
-
-    return matched;
-  });
-
-  console.log(`[chat-analytics] Found ${matchedChats} chats matching agent ${specificAgent}`);
-  console.log("[chat-analytics] Match details:", matchDetails.slice(0, 5)); // Show first 5 matches
-
-  return filteredChats;
-}
-
-// Balanced logic to match Periskope's "open chats" definition
+// Balanced filter function for active group chats
 function filterOpenChats(chats: Chat[]): Chat[] {
   const now = new Date();
   const currentTime = now.getTime();
   
-  return chats.filter(chat => {
+  console.log(`[chat-analytics] filtering ${chats.length} total chats`);
+  
+  const filtered = chats.filter(chat => {
+    // ONLY INCLUDE GROUP CHATS
+    if (chat.chat_type !== 'group') {
+      return false;
+    }
+    
     // 1. Skip explicitly closed chats
     if (chat.closed_at) {
       return false;
     }
     
-    // 2. Skip if agent has exited the group (for groups only)
-    if (chat.chat_type === 'group' && chat.is_exited) {
+    // 2. Skip if agent has exited the group
+    if (chat.is_exited) {
       return false;
     }
     
-    // 3. Get chat age and last activity
-    const chatCreated = new Date(chat.created_at).getTime();
-    const chatAgeInDays = (currentTime - chatCreated) / (24 * 60 * 60 * 1000);
+    // 3. Must have more than 1 member (but allow null member_count)
+    if (chat.member_count !== null && chat.member_count <= 1) {
+      return false;
+    }
     
-    let lastActivityTime = chatCreated;
+    // 4. Check for activity - be more lenient with time windows
+    let hasActivity = false;
+    let activityReason = "";
+    
+    // Check for message activity (last 3 months)
     if (chat.latest_message?.timestamp) {
-      lastActivityTime = new Date(chat.latest_message.timestamp).getTime();
-    } else if (chat.updated_at) {
-      lastActivityTime = new Date(chat.updated_at).getTime();
-    }
-    
-    const daysSinceLastActivity = (currentTime - lastActivityTime) / (24 * 60 * 60 * 1000);
-    
-    // 4. Chat type specific filtering with more reasonable thresholds
-    if (chat.chat_type === 'business') {
-      // Business chats: Keep if created in last 6 months OR activity in last 45 days
-      return chatAgeInDays <= 180 || daysSinceLastActivity <= 45;
-    }
-    
-    if (chat.chat_type === 'user') {
-      // User chats: Keep if created in last 4 months OR activity in last 30 days
-      return chatAgeInDays <= 120 || daysSinceLastActivity <= 30;
-    }
-    
-    if (chat.chat_type === 'group') {
-      // Skip empty groups
-      if (chat.member_count <= 1) {
-        return false;
+      const lastMessageTime = new Date(chat.latest_message.timestamp).getTime();
+      const threeMonthsAgo = currentTime - (90 * 24 * 60 * 60 * 1000);
+      if (lastMessageTime > threeMonthsAgo) {
+        hasActivity = true;
+        const daysAgo = Math.round((currentTime - lastMessageTime) / (24 * 60 * 60 * 1000));
+        activityReason = `recent message (${daysAgo} days ago)`;
       }
-      
-      // Group chats: Keep if created in last 3 months OR activity in last 21 days
-      return chatAgeInDays <= 90 || daysSinceLastActivity <= 21;
     }
     
-    // 5. Default for unknown chat types
-    return chatAgeInDays <= 60 || daysSinceLastActivity <= 30;
+    // If no recent messages, check if chat was created recently (last 30 days)
+    if (!hasActivity) {
+      const chatCreated = new Date(chat.created_at).getTime();
+      const thirtyDaysAgo = currentTime - (30 * 24 * 60 * 60 * 1000);
+      if (chatCreated > thirtyDaysAgo) {
+        hasActivity = true;
+        const daysAgo = Math.round((currentTime - chatCreated) / (24 * 60 * 60 * 1000));
+        activityReason = `recently created (${daysAgo} days ago)`;
+      }
+    }
+    
+    // If still no activity, check for recent updates (last 30 days)
+    if (!hasActivity && chat.updated_at) {
+      const updatedTime = new Date(chat.updated_at).getTime();
+      const thirtyDaysAgo = currentTime - (30 * 24 * 60 * 60 * 1000);
+      if (updatedTime > thirtyDaysAgo) {
+        hasActivity = true;
+        const daysAgo = Math.round((currentTime - updatedTime) / (24 * 60 * 60 * 1000));
+        activityReason = `recently updated (${daysAgo} days ago)`;
+      }
+    }
+    
+    // If still no activity, but member count is good and not too old, include it
+    if (!hasActivity && chat.member_count && chat.member_count > 1) {
+      const chatCreated = new Date(chat.created_at).getTime();
+      const sixMonthsAgo = currentTime - (180 * 24 * 60 * 60 * 1000);
+      if (chatCreated > sixMonthsAgo) {
+        hasActivity = true;
+        const daysAgo = Math.round((currentTime - chatCreated) / (24 * 60 * 60 * 1000));
+        activityReason = `active group created ${daysAgo} days ago`;
+      }
+    }
+    
+    if (hasActivity) {
+      console.log(`[chat-analytics] ✓ including: ${chat.chat_name} (${chat.member_count} members) - ${activityReason}`);
+    }
+    
+    return hasActivity;
   });
+  
+  console.log(`[chat-analytics] filtered to ${filtered.length} open chats`);
+  
+  // If we have too many, prioritize by recent activity
+  if (filtered.length > 100) {
+    console.log(`[chat-analytics] too many chats (${filtered.length}), sorting by recent activity`);
+    
+    const sortedByActivity = filtered.sort((a, b) => {
+      const aTime = a.latest_message?.timestamp 
+        ? new Date(a.latest_message.timestamp).getTime()
+        : new Date(a.updated_at || a.created_at).getTime();
+      const bTime = b.latest_message?.timestamp 
+        ? new Date(b.latest_message.timestamp).getTime()
+        : new Date(b.updated_at || b.created_at).getTime();
+      return bTime - aTime; // Most recent first
+    });
+    
+    // Take top 80 most recently active
+    const limited = sortedByActivity.slice(0, 80);
+    console.log(`[chat-analytics] limited to top ${limited.length} most recently active chats`);
+    return limited;
+  }
+  
+  return filtered;
 }
 
-// Helper function to process chats and calculate metrics
 function processChats(chats: Chat[], specificAgent?: string) {
   const now = new Date();
   const currentTime = now.getTime();
@@ -322,7 +266,6 @@ function processChats(chats: Chat[], specificAgent?: string) {
       }
     }
 
-    // Check if requires response (delayed) - more realistic thresholds
     if (requiresResponse) {
       chatsWithDelayedResponse++;
       delayedResponseDetails.push({
@@ -380,8 +323,8 @@ function processChats(chats: Chat[], specificAgent?: string) {
         business: chats.filter((c) => c.chat_type === "business").length,
       },
       filterApplied: specificAgent 
-        ? `Specific agent filter: ${specificAgent} (+91 85270 14950) - excludes only closed, exited, or very old inactive chats`
-        : "Inclusive open chat logic - excludes only closed, exited, or very old inactive chats"
+        ? `GROUP CHATS ONLY - agent filter temporarily disabled. Showing all group chats.`
+        : "GROUP CHATS ONLY - showing all group chats"
     },
   };
 
@@ -415,46 +358,28 @@ function calculateChatUrgency(chat: Chat, currentTime: number) {
   ageMs = currentTime - lastActivityTime;
   const ageInHours = ageMs / (1000 * 60 * 60);
 
-  // More realistic response requirements
+  // More realistic response requirements for group chats
   if (chat.latest_message) {
     const isLastMessageFromCustomer = !chat.latest_message.from_me;
     
     if (isLastMessageFromCustomer) {
-      if (chat.chat_type === 'business') {
-        // Business chats: response needed within 24 hours (more realistic)
-        if (ageInHours > 24) {
-          requiresResponse = true;
-          urgencyLevel = ageInHours > 72 ? "critical" : ageInHours > 48 ? "high" : "medium";
-        }
-      } else if (chat.chat_type === 'user') {
-        // User chats: response needed within 48 hours
-        if (ageInHours > 48) {
-          requiresResponse = true;
-          urgencyLevel = ageInHours > 168 ? "critical" : ageInHours > 72 ? "high" : "medium"; // 168h = 1 week
-        }
-      } else if (chat.chat_type === 'group') {
-        // Group chats: response needed within 72 hours (3 days)
-        if (ageInHours > 72) {
-          requiresResponse = true;
-          urgencyLevel = ageInHours > 168 ? "critical" : ageInHours > 120 ? "high" : "medium"; // 120h = 5 days
-        }
+      // Group chats: response needed within 72 hours (3 days)
+      if (ageInHours > 72) {
+        requiresResponse = true;
+        urgencyLevel = ageInHours > 168 ? "critical" : ageInHours > 120 ? "high" : "medium"; // 120h = 5 days
       }
     }
   } else {
-    // No messages yet - new chat needs attention (more lenient)
-    if (chat.chat_type === 'business' && ageInHours > 48) { // 2 days instead of 2 hours
-      requiresResponse = true;
-      urgencyLevel = "medium";
-    } else if (chat.chat_type === 'user' && ageInHours > 72) { // 3 days instead of 4 hours
+    // No messages yet - new group needs attention
+    if (ageInHours > 72) { // 3 days
       requiresResponse = true;
       urgencyLevel = "medium";
     }
   }
 
-  // Overall urgency based on age (more realistic thresholds)
-  if (ageInHours > 168) urgencyLevel = "critical"; // 1 week
-  else if (ageInHours > 120) urgencyLevel = "high"; // 5 days
-  else if (ageInHours > 72) urgencyLevel = "medium"; // 3 days
+  if (ageInHours > 168) urgencyLevel = "critical"; 
+  else if (ageInHours > 120) urgencyLevel = "high"; 
+  else if (ageInHours > 72) urgencyLevel = "medium"; 
   else urgencyLevel = "low";
 
   return {
