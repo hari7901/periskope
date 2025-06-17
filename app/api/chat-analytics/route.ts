@@ -132,12 +132,13 @@ async function fetchAllChats(): Promise<Chat[]> {
   return uniqueChats;
 }
 
-// Balanced filter function for active group chats
+// Filter for open chats from the last 2 months
 function filterOpenChats(chats: Chat[]): Chat[] {
   const now = new Date();
   const currentTime = now.getTime();
+  const twoMonthsAgo = currentTime - (60 * 24 * 60 * 60 * 1000); // 60 days
   
-  console.log(`[chat-analytics] filtering ${chats.length} total chats`);
+  console.log(`[chat-analytics] filtering ${chats.length} total chats for last 2 months activity`);
   
   const filtered = chats.filter(chat => {
     // ONLY INCLUDE GROUP CHATS
@@ -155,89 +156,65 @@ function filterOpenChats(chats: Chat[]): Chat[] {
       return false;
     }
     
-    // 3. Must have more than 1 member (but allow null member_count)
-    if (chat.member_count !== null && chat.member_count <= 1) {
-      return false;
-    }
-    
-    // 4. Check for activity - be more lenient with time windows
-    let hasActivity = false;
+    // 3. Must have activity in the last 2 months (60 days)
+    let hasRecentActivity = false;
     let activityReason = "";
+    let activityDate: Date | null = null;
     
-    // Check for message activity (last 3 months)
+    // Check for message activity in last 2 months
     if (chat.latest_message?.timestamp) {
       const lastMessageTime = new Date(chat.latest_message.timestamp).getTime();
-      const threeMonthsAgo = currentTime - (90 * 24 * 60 * 60 * 1000);
-      if (lastMessageTime > threeMonthsAgo) {
-        hasActivity = true;
+      if (lastMessageTime > twoMonthsAgo) {
+        hasRecentActivity = true;
+        activityDate = new Date(lastMessageTime);
         const daysAgo = Math.round((currentTime - lastMessageTime) / (24 * 60 * 60 * 1000));
-        activityReason = `recent message (${daysAgo} days ago)`;
+        activityReason = `message activity ${daysAgo} days ago`;
       }
     }
     
-    // If no recent messages, check if chat was created recently (last 30 days)
-    if (!hasActivity) {
+    // If no recent messages, check if chat was created in last 2 months
+    if (!hasRecentActivity) {
       const chatCreated = new Date(chat.created_at).getTime();
-      const thirtyDaysAgo = currentTime - (30 * 24 * 60 * 60 * 1000);
-      if (chatCreated > thirtyDaysAgo) {
-        hasActivity = true;
+      if (chatCreated > twoMonthsAgo) {
+        hasRecentActivity = true;
+        activityDate = new Date(chatCreated);
         const daysAgo = Math.round((currentTime - chatCreated) / (24 * 60 * 60 * 1000));
-        activityReason = `recently created (${daysAgo} days ago)`;
+        activityReason = `created ${daysAgo} days ago`;
       }
     }
     
-    // If still no activity, check for recent updates (last 30 days)
-    if (!hasActivity && chat.updated_at) {
+    // If still no recent activity, check for updates in last 2 months
+    if (!hasRecentActivity && chat.updated_at) {
       const updatedTime = new Date(chat.updated_at).getTime();
-      const thirtyDaysAgo = currentTime - (30 * 24 * 60 * 60 * 1000);
-      if (updatedTime > thirtyDaysAgo) {
-        hasActivity = true;
+      if (updatedTime > twoMonthsAgo) {
+        hasRecentActivity = true;
+        activityDate = new Date(updatedTime);
         const daysAgo = Math.round((currentTime - updatedTime) / (24 * 60 * 60 * 1000));
-        activityReason = `recently updated (${daysAgo} days ago)`;
+        activityReason = `updated ${daysAgo} days ago`;
       }
     }
     
-    // If still no activity, but member count is good and not too old, include it
-    if (!hasActivity && chat.member_count && chat.member_count > 1) {
-      const chatCreated = new Date(chat.created_at).getTime();
-      const sixMonthsAgo = currentTime - (180 * 24 * 60 * 60 * 1000);
-      if (chatCreated > sixMonthsAgo) {
-        hasActivity = true;
-        const daysAgo = Math.round((currentTime - chatCreated) / (24 * 60 * 60 * 1000));
-        activityReason = `active group created ${daysAgo} days ago`;
-      }
+    if (hasRecentActivity) {
+      console.log(`[chat-analytics] ✓ including: ${chat.chat_name} (${chat.member_count || 'unknown'} members) - ${activityReason}`);
     }
     
-    if (hasActivity) {
-      console.log(`[chat-analytics] ✓ including: ${chat.chat_name} (${chat.member_count} members) - ${activityReason}`);
-    }
-    
-    return hasActivity;
+    return hasRecentActivity;
   });
   
-  console.log(`[chat-analytics] filtered to ${filtered.length} open chats`);
+  console.log(`[chat-analytics] filtered to ${filtered.length} open chats with activity in last 2 months`);
   
-  // If we have too many, prioritize by recent activity
-  if (filtered.length > 100) {
-    console.log(`[chat-analytics] too many chats (${filtered.length}), sorting by recent activity`);
-    
-    const sortedByActivity = filtered.sort((a, b) => {
-      const aTime = a.latest_message?.timestamp 
-        ? new Date(a.latest_message.timestamp).getTime()
-        : new Date(a.updated_at || a.created_at).getTime();
-      const bTime = b.latest_message?.timestamp 
-        ? new Date(b.latest_message.timestamp).getTime()
-        : new Date(b.updated_at || b.created_at).getTime();
-      return bTime - aTime; // Most recent first
-    });
-    
-    // Take top 80 most recently active
-    const limited = sortedByActivity.slice(0, 80);
-    console.log(`[chat-analytics] limited to top ${limited.length} most recently active chats`);
-    return limited;
-  }
+  // Sort by most recent activity
+  const sortedByActivity = filtered.sort((a, b) => {
+    const aTime = a.latest_message?.timestamp 
+      ? new Date(a.latest_message.timestamp).getTime()
+      : new Date(a.updated_at || a.created_at).getTime();
+    const bTime = b.latest_message?.timestamp 
+      ? new Date(b.latest_message.timestamp).getTime()
+      : new Date(b.updated_at || b.created_at).getTime();
+    return bTime - aTime; // Most recent first
+  });
   
-  return filtered;
+  return sortedByActivity;
 }
 
 function processChats(chats: Chat[], specificAgent?: string) {
