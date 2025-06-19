@@ -26,19 +26,19 @@ export async function GET(request: NextRequest) {
   const targetAgent = "918527014950@c.us";
   
   console.log("[chat-analytics] Starting chat analytics for agent:", targetAgent);
-  console.log("[chat-analytics] Using org_phone filtering with 2-month activity window");
+  console.log("[chat-analytics] Using timestamp-based open/closed filtering");
 
   try {
-    // Fetch group chats with recent activity (last 2 months) and filter by org_phone client-side
+    // Fetch all group chats and filter by org_phone client-side
     const agentChats = await fetchChatsByOrgPhone(targetAgent);
-    console.log(`[chat-analytics] Found ${agentChats.length} group chats with org_phone ${targetAgent} and recent activity`);
+    console.log(`[chat-analytics] Found ${agentChats.length} group chats with org_phone ${targetAgent}`);
 
-    // Filter for active chats in the last two months
-    const activeChats = filterForOpenChats(agentChats);
-    console.log(`[chat-analytics] Found ${activeChats.length} chats (including recently closed within 24h)`);
+    // Filter for truly open chats using timestamp comparison
+    const openChats = filterForOpenChats(agentChats);
+    console.log(`[chat-analytics] FINAL RESULT: ${openChats.length} truly open chats after timestamp filtering`);
 
     // Process the results
-    const metrics = processChatsToMetrics(activeChats, targetAgent);
+    const metrics = processChatsToMetrics(openChats, targetAgent);
 
     return NextResponse.json({ metrics });
     
@@ -56,7 +56,7 @@ export async function GET(request: NextRequest) {
 
 // Fetch all group chats and filter by org_phone client-side
 async function fetchChatsByOrgPhone(targetAgent: string): Promise<Chat[]> {
-  const agentChats: Chat[] = [];
+  const agentChatsMap = new Map<string, Chat>(); // Use Map to prevent duplicates
   let hasMore = true;
   let offset = 0;
   const limit = 1000;
@@ -80,21 +80,18 @@ async function fetchChatsByOrgPhone(targetAgent: string): Promise<Chat[]> {
       
       console.log(`[chat-analytics] Page returned ${pageChats.length} group chats`);
 
-      // Filter chats by org_phone client-side
-      const filteredChats = pageChats.filter(chat => {
-        return chat.org_phone === targetAgent;
+      // Filter chats by org_phone client-side and prevent duplicates
+      pageChats.forEach(chat => {
+        if (chat.org_phone === targetAgent) {
+          // Use chat_id as unique key to prevent duplicates
+          if (!agentChatsMap.has(chat.chat_id)) {
+            agentChatsMap.set(chat.chat_id, chat);
+            totalChatsWithAgent++;
+          }
+        }
       });
 
-      totalChatsWithAgent += filteredChats.length;
-      agentChats.push(...filteredChats);
-
-      console.log(`[chat-analytics] Filtered page: ${filteredChats.length}/${pageChats.length} chats have org_phone ${targetAgent}`);
-
-      // Log sample of org_phones found on this page for debugging
-      if (pageChats.length > 0) {
-        const orgPhones = [...new Set(pageChats.map(chat => chat.org_phone))];
-        console.log(`[chat-analytics] Unique org_phones on this page: ${orgPhones.slice(0, 10).join(', ')}${orgPhones.length > 10 ? '...' : ''}`);
-      }
+      console.log(`[chat-analytics] Filtered page: ${agentChatsMap.size} unique chats so far with org_phone ${targetAgent}`);
 
       if (pageChats.length < limit) {
         hasMore = false;
@@ -108,207 +105,77 @@ async function fetchChatsByOrgPhone(targetAgent: string): Promise<Chat[]> {
     }
   }
 
-  console.log(`[chat-analytics] SUMMARY: Checked ${totalChatsChecked} total group chats, found ${totalChatsWithAgent} with org_phone ${targetAgent}`);
+  const agentChats = Array.from(agentChatsMap.values());
+  console.log(`[chat-analytics] SUMMARY: Checked ${totalChatsChecked} total group chats, found ${agentChats.length} unique chats with org_phone ${targetAgent}`);
   
-  // Log some examples of found chats with their closure info
-  if (agentChats.length > 0) {
-    console.log(`[chat-analytics] Sample chats found:`, 
-      agentChats.slice(0, 5).map(chat => {
-        let closureInfo = 'not set';
-        if (chat.closed_at) {
-          if (typeof chat.closed_at === 'number') {
-            const closedDate = new Date(chat.closed_at);
-            const now = new Date();
-            closureInfo = `${closedDate.toLocaleDateString()} (${closedDate > now ? 'future' : 'past'})`;
-          } else {
-            closureInfo = `${chat.closed_at} (string)`;
-          }
-        }
-        
-        return {
-          name: chat.chat_name,
-          orgPhone: chat.org_phone,
-          memberCount: chat.member_count,
-          assignedTo: chat.assigned_to,
-          closedAt: closureInfo,
-          isExited: chat.is_exited,
-          hasClosedAt: !!chat.closed_at,
-          rawClosedAt: chat.closed_at,
-          lastMessage: chat.latest_message?.timestamp ? new Date(chat.latest_message.timestamp).toLocaleDateString() : 'none'
-        };
-      })
-    );
-  }
-
   return agentChats;
 }
 
-// Filter for truly active chats in the last two months
+// NEW: Timestamp-based open/closed filtering function
 function filterForOpenChats(chats: Chat[]): Chat[] {
-  const now = new Date();
-  const currentTime = now.getTime();
-  const twoMonthsAgo = currentTime - (60 * 24 * 60 * 60 * 1000); // 60 days
-  const oneMonthAgo = currentTime - (30 * 24 * 60 * 60 * 1000); // 30 days
+  console.log(`[TIMESTAMP-FILTER] Starting timestamp-based filtering for ${chats.length} chats`);
 
-  console.log(`[chat-analytics] Filtering ${chats.length} chats for active status in last 2 months`);
-
-  const activeChats = chats.filter((chat, index) => {
-    // 1. EXCLUDE: Check if chat is exited
+  const openChats = chats.filter((chat, index) => {
+    // Skip exited chats
     if (chat.is_exited) {
-      if (index < 10) console.log(`[chat-analytics] ✗ Skipping exited: ${chat.chat_name}`);
+      if (index < 5) console.log(`[TIMESTAMP-FILTER] ✗ Exited: ${chat.chat_name}`);
       return false;
     }
 
-    // 2. Handle closed chats more intelligently
-    if (chat.closed_at) {
-      let shouldExclude = false;
-      
-      if (typeof chat.closed_at === 'number') {
-        const closedDate = new Date(chat.closed_at);
-        const hoursAgo = Math.round((currentTime - chat.closed_at) / (1000 * 60 * 60));
-        
-        // Only exclude chats closed more than 24 hours ago
-        if (hoursAgo > 24) {
-          shouldExclude = true;
-          if (index < 10) console.log(`[chat-analytics] ✗ Skipping old closure: ${chat.chat_name} (closed ${hoursAgo}h ago)`);
-        } else {
-          // Recently closed (within 24h) - include for analysis
-          if (index < 10) console.log(`[chat-analytics] ℹ Recently closed: ${chat.chat_name} (${hoursAgo}h ago) - including for analysis`);
-        }
-      } else if (typeof chat.closed_at === 'string') {
-        const closedTime = new Date(chat.closed_at).getTime();
-        const hoursAgo = Math.round((currentTime - closedTime) / (1000 * 60 * 60));
-        if (!isNaN(closedTime) && hoursAgo > 24) {
-          shouldExclude = true;
-          if (index < 10) console.log(`[chat-analytics] ✗ Skipping old closure: ${chat.chat_name} (closed ${hoursAgo}h ago)`);
-        }
-      }
-      
-      if (shouldExclude) {
-        return false;
-      }
-    } else {
-      // No closed_at - definitely active
-      if (index < 10) console.log(`[chat-analytics] ✓ No closure timestamp: ${chat.chat_name} - definitely active`);
-    }
-
-    // 3. INCLUDE: Check for activity (be very permissive since most chats seem to be closed)
-    let hasRecentActivity = false;
-    let activityReason = "";
-
-    // A. Any message activity in last 6 months (very permissive)
-    if (chat.latest_message?.timestamp) {
-      const lastMessageTime = new Date(chat.latest_message.timestamp).getTime();
-      const sixMonthsAgo = currentTime - (180 * 24 * 60 * 60 * 1000);
-      if (lastMessageTime > sixMonthsAgo) {
-        hasRecentActivity = true;
-        const daysAgo = Math.round((currentTime - lastMessageTime) / (24 * 60 * 60 * 1000));
-        activityReason = `message ${daysAgo} days ago`;
-      }
-    }
-
-    // B. Recently updated (system activity) - 6 months
-    if (!hasRecentActivity && chat.updated_at) {
-      const updatedTime = new Date(chat.updated_at).getTime();
-      const sixMonthsAgo = currentTime - (180 * 24 * 60 * 60 * 1000);
-      if (updatedTime > sixMonthsAgo) {
-        hasRecentActivity = true;
-        const daysAgo = Math.round((currentTime - updatedTime) / (24 * 60 * 60 * 1000));
-        activityReason = `updated ${daysAgo} days ago`;
-      }
-    }
-
-    // C. Recently created (within last 6 months)
-    if (!hasRecentActivity) {
-      const createdTime = new Date(chat.created_at).getTime();
-      const sixMonthsAgo = currentTime - (180 * 24 * 60 * 60 * 1000);
-      if (createdTime > sixMonthsAgo) {
-        hasRecentActivity = true;
-        const daysAgo = Math.round((currentTime - createdTime) / (24 * 60 * 60 * 1000));
-        activityReason = `created ${daysAgo} days ago`;
-      }
-    }
-
-    // D. Currently assigned (include regardless of activity age)
-    if (!hasRecentActivity && chat.assigned_to) {
-      hasRecentActivity = true;
-      activityReason = `assigned to ${chat.assigned_to}`;
-    }
-
-    // E. Has invite link (maintained groups)
-    if (!hasRecentActivity && chat.invite_link) {
-      hasRecentActivity = true;
-      activityReason = `has invite link`;
-    }
-
-    // F. For debugging - include first 5 chats regardless
-    if (!hasRecentActivity && index < 5) {
-      hasRecentActivity = true;
-      activityReason = `DEBUG: force include for testing`;
-    }
-
-    // Log decision
-    if (hasRecentActivity) {
-      if (index < 20) console.log(`[chat-analytics] ✓ Including: ${chat.chat_name} - ${activityReason}`);
+    // If there's no closed_at, the chat is considered open
+    if (!chat.closed_at) {
+      if (index < 10) console.log(`[TIMESTAMP-FILTER] ✓ No closed_at (open): ${chat.chat_name}`);
       return true;
+    }
+
+    // If there's a closed_at, check if latest message timestamp is greater than closed_at
+    if (chat.latest_message?.timestamp) {
+      const latestMessageTime = new Date(chat.latest_message.timestamp).getTime();
+      const closedAtTime = typeof chat.closed_at === 'number' ? chat.closed_at : new Date(chat.closed_at).getTime();
+      
+      if (latestMessageTime > closedAtTime) {
+        if (index < 10) {
+          console.log(`[TIMESTAMP-FILTER] ✓ Reopened by message: ${chat.chat_name}`);
+          console.log(`  Latest message: ${new Date(latestMessageTime).toISOString()}`);
+          console.log(`  Closed at: ${new Date(closedAtTime).toISOString()}`);
+        }
+        return true; // Chat was reopened by a message after closure
+      } else {
+        if (index < 5) {
+          console.log(`[TIMESTAMP-FILTER] ✗ Closed (message before closure): ${chat.chat_name}`);
+          console.log(`  Latest message: ${new Date(latestMessageTime).toISOString()}`);
+          console.log(`  Closed at: ${new Date(closedAtTime).toISOString()}`);
+        }
+        return false; // Chat is closed and no messages after closure
+      }
     } else {
-      if (index < 10) console.log(`[chat-analytics] ✗ Excluding: ${chat.chat_name} - no recent activity in last 2 months`);
+      // No latest message but has closed_at - consider it closed
+      if (index < 5) console.log(`[TIMESTAMP-FILTER] ✗ No messages and has closed_at: ${chat.chat_name}`);
       return false;
     }
   });
 
-  console.log(`[chat-analytics] ACTIVE FILTER RESULT: ${activeChats.length} chats (including recently closed within 24h)`);
+  console.log(`[TIMESTAMP-FILTER] RESULT: Found ${openChats.length} truly open chats based on timestamp comparison`);
   
-  // Show breakdown of included chats
-  if (activeChats.length > 0) {
-    const oneMonthAgo = currentTime - (30 * 24 * 60 * 60 * 1000);
-    const withRecentMessages = activeChats.filter(chat => {
-      if (!chat.latest_message?.timestamp) return false;
-      const lastMessageTime = new Date(chat.latest_message.timestamp).getTime();
-      return lastMessageTime > oneMonthAgo;
-    }).length;
-
-    const assigned = activeChats.filter(chat => !!chat.assigned_to).length;
-    const sixMonthsAgo = currentTime - (180 * 24 * 60 * 60 * 1000);
-    const recentlyCreated = activeChats.filter(chat => {
-      const createdTime = new Date(chat.created_at).getTime();
-      return createdTime > sixMonthsAgo;
-    }).length;
-
-    const recentlyClosed = activeChats.filter(chat => {
-      if (!chat.closed_at || typeof chat.closed_at !== 'number') return false;
-      const hoursAgo = Math.round((currentTime - chat.closed_at) / (1000 * 60 * 60));
-      return hoursAgo <= 24;
-    }).length;
-
-    const neverClosed = activeChats.filter(chat => !chat.closed_at).length;
-
-    console.log(`[chat-analytics] Breakdown: ${withRecentMessages} recent messages, ${assigned} assigned, ${recentlyCreated} recently created, ${recentlyClosed} recently closed, ${neverClosed} never closed`);
-
-    console.log(`[chat-analytics] Breakdown: ${withRecentMessages} with recent messages, ${assigned} assigned, ${recentlyCreated} recently created`);
+  // Log some examples for debugging
+  console.log(`[TIMESTAMP-FILTER] Examples of filtering decisions:`);
+  chats.slice(0, 3).forEach(chat => {
+    const isOpen = openChats.includes(chat);
+    const hasClosedAt = !!chat.closed_at;
+    const hasLatestMessage = !!chat.latest_message?.timestamp;
     
-    // Log top 5 most recent chats
-    const sortedByActivity = [...activeChats].sort((a, b) => {
-      const aTime = a.latest_message?.timestamp ? new Date(a.latest_message.timestamp).getTime() : new Date(a.updated_at || a.created_at).getTime();
-      const bTime = b.latest_message?.timestamp ? new Date(b.latest_message.timestamp).getTime() : new Date(b.updated_at || b.created_at).getTime();
-      return bTime - aTime;
-    });
+    console.log(`  ${chat.chat_name}: ${isOpen ? 'OPEN' : 'CLOSED'}`);
+    console.log(`    - closed_at: ${hasClosedAt ? new Date(chat.closed_at!).toISOString() : 'null'}`);
+    console.log(`    - latest_message: ${hasLatestMessage ? new Date(chat.latest_message!.timestamp).toISOString() : 'null'}`);
+    
+    if (hasClosedAt && hasLatestMessage) {
+      const latestMessageTime = new Date(chat.latest_message!.timestamp).getTime();
+      const closedAtTime = typeof chat.closed_at === 'number' ? chat.closed_at : new Date(chat.closed_at!).getTime();
+      console.log(`    - message > closed_at: ${latestMessageTime > closedAtTime}`);
+    }
+  });
 
-    console.log(`[chat-analytics] Top 5 most active chats:`, 
-      sortedByActivity.slice(0, 5).map(chat => {
-        const lastActivity = chat.latest_message?.timestamp || chat.updated_at || chat.created_at;
-        const daysAgo = Math.round((currentTime - new Date(lastActivity).getTime()) / (24 * 60 * 60 * 1000));
-        return {
-          name: chat.chat_name,
-          lastActivity: `${daysAgo} days ago`,
-          members: chat.member_count,
-          assigned: chat.assigned_to || 'unassigned'
-        };
-      })
-    );
-  }
-  
-  return activeChats;
+  return openChats;
 }
 
 // Streamlined metrics processing
@@ -393,7 +260,7 @@ function processChatsToMetrics(chats: Chat[], targetAgent: string): ChatMetrics 
     averageAgeInHours,
     maxAgeInHours,
     chatsWithDelayedResponse,
-    openChatDetails: openChatDetails.sort((a, b) => b.ageInHours - a.ageInHours), // Sort by age (oldest first)
+    openChatDetails: openChatDetails.sort((a, b) => b.ageInHours - a.ageInHours),
     delayedResponseDetails: delayedResponseDetails.sort((a, b) => b.hoursWithoutResponse - a.hoursWithoutResponse),
     _debug: {
       periskopePhone: process.env.NEXT_PUBLIC_PERISKOPE_PHONE,
@@ -405,7 +272,7 @@ function processChatsToMetrics(chats: Chat[], targetAgent: string): ChatMetrics 
         group: chats.length,
         business: 0,
       },
-      filterApplied: `org_phone filtering for ${targetAgent} with 2-month activity window and duplicate removal`
+      filterApplied: `Timestamp-based filtering: latest_message.timestamp > closed_at = OPEN, else CLOSED`
     },
   };
 
@@ -426,7 +293,7 @@ function processChatsToMetrics(chats: Chat[], targetAgent: string): ChatMetrics 
   return metrics;
 }
 
-// Enhanced urgency calculation with better overdue detection
+// Enhanced urgency calculation with DEBUGGING to identify the issue
 function calculateChatUrgency(chat: Chat, currentTime: number) {
   let lastActivityTime: number;
   let ageMs: number;
@@ -445,36 +312,76 @@ function calculateChatUrgency(chat: Chat, currentTime: number) {
   ageMs = currentTime - lastActivityTime;
   const ageInHours = ageMs / (1000 * 60 * 60);
 
-  // Enhanced overdue response detection
+  // DEBUGGING: Log every chat evaluation
+  console.log(`\n=== CHAT EVALUATION: ${chat.chat_name} ===`);
+  console.log(`Chat ID: ${chat.chat_id}`);
+  console.log(`Has latest_message: ${!!chat.latest_message}`);
+  
   if (chat.latest_message) {
-    const lastMessageFromCustomer = !chat.latest_message.from_me;
+    console.log(`from_me: ${chat.latest_message.from_me}`);
+    console.log(`sender_phone: ${chat.latest_message.sender_phone}`);
+    console.log(`org_phone: ${chat.org_phone}`);
+    console.log(`timestamp: ${chat.latest_message.timestamp}`);
+    console.log(`hours since message: ${Math.round(((currentTime - new Date(chat.latest_message.timestamp).getTime()) / (1000 * 60 * 60)) * 100) / 100}`);
+  }
+
+  // ULTRA-STRICT overdue logic with detailed logging
+  if (chat.latest_message) {
     const lastMessageTime = new Date(chat.latest_message.timestamp).getTime();
     const hoursSinceLastMessage = (currentTime - lastMessageTime) / (1000 * 60 * 60);
+    
+    // Get the exact from_me value
+    const fromMeValue = chat.latest_message.from_me;
+    
+    console.log(`fromMeValue type: ${typeof fromMeValue}, value: ${fromMeValue}`);
 
-    // Check if customer's message needs response
-    if (lastMessageFromCustomer && hoursSinceLastMessage > 24) {
+    // RULE 1: If from_me is true, NEVER overdue
+    if (fromMeValue === true) {
+      requiresResponse = false;
+      urgencyLevel = "low";
+      console.log(`RESULT: NOT OVERDUE - We sent last message (from_me: true)`);
+      console.log(`=====================================\n`);
+      
+      return {
+        ageMs,
+        ageInHours: Math.round(ageInHours * 100) / 100,
+        lastActivityTime,
+        urgencyLevel,
+        requiresResponse
+      };
+    }
+
+    // RULE 2: Only overdue if from_me is EXPLICITLY false AND > 24 hours
+    if (fromMeValue === false && hoursSinceLastMessage > 24) {
       requiresResponse = true;
       
       // Set urgency based on how long customer has been waiting
-      if (hoursSinceLastMessage > 168) urgencyLevel = "critical"; // 7+ days
-      else if (hoursSinceLastMessage > 72) urgencyLevel = "high"; // 3+ days  
-      else if (hoursSinceLastMessage > 48) urgencyLevel = "medium"; // 2+ days
-      else urgencyLevel = "low"; // 1-2 days
+      if (hoursSinceLastMessage > 168) urgencyLevel = "critical"; 
+      else if (hoursSinceLastMessage > 72) urgencyLevel = "high";  
+      else if (hoursSinceLastMessage > 48) urgencyLevel = "medium"; 
+      else urgencyLevel = "low"; 
       
-      console.log(`[urgency] Customer waiting in "${chat.chat_name}": ${Math.round(hoursSinceLastMessage)}h since their message`);
-    } else if (lastMessageFromCustomer && hoursSinceLastMessage <= 24) {
-      // Recent customer message, not overdue yet
+      console.log(`RESULT: OVERDUE - Customer waiting ${Math.round(hoursSinceLastMessage)}h (from_me: false)`);
+      console.log(`=====================================\n`);
+    } else if (fromMeValue === false && hoursSinceLastMessage <= 24) {
+      // Customer message but recent
+      requiresResponse = false;
       urgencyLevel = "low";
+      console.log(`RESULT: NOT OVERDUE - Recent customer message ${Math.round(hoursSinceLastMessage)}h ago`);
+      console.log(`=====================================\n`);
     } else {
-      // Last message was from us, check overall chat age
-      if (ageInHours > 168) urgencyLevel = "medium"; 
-      else if (ageInHours > 120) urgencyLevel = "low"; 
-      else urgencyLevel = "low";
+      // Any unclear case - default to NOT overdue
+      requiresResponse = false;
+      urgencyLevel = "low";
+      console.log(`RESULT: NOT OVERDUE - Unclear case (from_me: ${fromMeValue})`);
+      console.log(`=====================================\n`);
     }
   } else {
-    // No messages, check chat age
-    if (ageInHours > 168) urgencyLevel = "medium"; 
-    else urgencyLevel = "low";
+    // No messages - never overdue
+    requiresResponse = false;
+    urgencyLevel = "low";
+    console.log(`RESULT: NOT OVERDUE - No messages in chat`);
+    console.log(`=====================================\n`);
   }
 
   return {

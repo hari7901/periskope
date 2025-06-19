@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Messaging Credits Alert - IntelliTicks</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #f4f4f4;">
+    <div style="max-width: 600px; margin: 20px auto; background: #ffffff; border-radius: 10px; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1); overflow: hidden;">
+        
+        <!-- Header with Logo -->
+        <div style="background: #667eea; padding: 30px; text-align: center;">
+            <img src="https://userimg-bee.customeriomail.com/images/client-env-99066/IntelliTicks%20Logo.png"
+                 alt="IntelliTicks Logo"
+                 style="max-width: 180px; height: auto; filter: brightness(0) invert(1);">
+        </div>
+
+        <!-- Main Content -->
+        <div style="padding: 30px;">
+            
+            <!-- Greeting -->
+            <h2 style="color: #333; margin: 0 0 20px 0; font-size: 24px;">
+                Hi {{steps.send_http_request_1.$return_value.data[0].name.replace(/\+/g, ' ')}},
+            </h2>
+
+            <!-- Alert Message -->
+            <div style="background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 8px; padding: 20px; margin: 20px 0;">
+                <p style="color: #856404; margin: 0; font-size: 16px; line-height: 1.5;">
+                    ⚠️ This is to inform you that your <strong>Messaging Credits are low</strong>.
+                    Please buy messaging credits to continue sending messages.
+                </p>
+                <p style="color: #856404; margin: 10px 0 0 0; font-size: 14px; font-style: italic;">
+                    If you have already purchased, kindly ignore this message.
+                </p>
+            </div>
+
+            <!-- Balance Display -->
+            <div style="background: #f8f9fa; border-radius: 8px; padding: 20px; margin: 20px 0; text-align: center; border: 2px solid #e9ecef;">
+                <div style="color: #6c757d; font-size: 14px; margin-bottom: 5px;">
+                    Current Balance
+                </div>
+                <div style="color: #dc3545; font-size: 28px; font-weight: bold;">
+                    ₹ {{steps.check_again_for_low_balance1.$return_value.data.balance.toFixed(2).toString()}}
+                </div>
+                <div style="color: #6c757d; font-size: 12px; margin-top: 5px;">
+                    Company: {{steps.get_request.$return_value.data.company_name}}
+                </div>
+            </div>
+
+            <!-- Recharge Button -->
+            <div style="text-align: center; margin: 30px 0;">
+                <a href="{{steps.send_http_request.$return_value.data.recharge_link}}"
+                   style="display: inline-block; background: #667eea; color: #ffffff; text-decoration: none; padding: 12px 25px; border-radius: 5px; font-weight: bold; font-size: 16px;">
+                    Recharge Now
+                </a>
+            </div>
+
+        </div>
+
+        <!-- Footer -->
+        <div style="background: #f8f9fa; padding: 20px; text-align: center; border-top: 1px solid #e9ecef;">
+            <p style="color: #333; margin: 0 0 5px 0; font-size: 16px; font-weight: bold;">
+                Harry
+            </p>
+            <p style="color: #6c757d; margin: 0 0 5px 0; font-size: 14px;">
+                Founder - IntelliTicks.com
+            </p>
+            <p style="color: #667eea; margin: 0; font-size: 14px;">
+                <a href="mailto:sales@intelliticks.com" style="color: #667eea; text-decoration: none;">
+                    sales@intelliticks.com
+                </a>
+            </p>
+        </div>
+    </div>
+</body>
+</html>
