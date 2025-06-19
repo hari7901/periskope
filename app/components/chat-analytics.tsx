@@ -92,21 +92,28 @@ export default function ChatAnalytics({ orgPhone }: ChatAnalyticsProps) {
     }
   };
 
-  const getUrgencyLevel = (hours: number, urgency?: string) => {
-    if (urgency) {
-      switch (urgency) {
-        case "critical": return { level: "critical", color: "red", label: "Critical" };
-        case "high": return { level: "high", color: "orange", label: "High" };
-        case "medium": return { level: "medium", color: "yellow", label: "Medium" };
-        default: return { level: "low", color: "emerald", label: "Low" };
+  // FIXED: Only apply urgency colors to overdue chats, neutral colors for open chats
+  const getUrgencyLevel = (hours: number, urgency?: string, isOverdue: boolean = false) => {
+    // For overdue chats, use urgency color coding
+    if (isOverdue) {
+      if (urgency) {
+        switch (urgency) {
+          case "critical": return { level: "critical", color: "red", label: "Critical" };
+          case "high": return { level: "high", color: "orange", label: "High" };
+          case "medium": return { level: "medium", color: "yellow", label: "Medium" };
+          default: return { level: "low", color: "emerald", label: "Low" };
+        }
       }
+      
+      // Color coding for overdue chats based on response delay
+      if (hours <= 48) return { level: "low", color: "emerald", label: "Low" }; // 0-2 days = GREEN
+      if (hours <= 168) return { level: "medium", color: "yellow", label: "Medium" }; // 2-7 days = YELLOW  
+      if (hours <= 336) return { level: "high", color: "orange", label: "High" }; // 7-14 days = ORANGE
+      return { level: "critical", color: "red", label: "Critical" }; // 14+ days = RED
     }
     
-    // Fallback to hour-based logic
-    if (hours < 2) return { level: "low", color: "emerald", label: "Fresh" };
-    if (hours < 8) return { level: "medium", color: "yellow", label: "Active" };
-    if (hours < 24) return { level: "high", color: "orange", label: "Aging" };
-    return { level: "critical", color: "red", label: "Critical" };
+    // For open chats, always use neutral blue color regardless of age
+    return { level: "neutral", color: "blue", label: "Open" };
   };
 
   const getMetricCardClasses = (
@@ -230,6 +237,14 @@ export default function ChatAnalytics({ orgPhone }: ChatAnalyticsProps) {
   
   const getChatCardClasses = (urgency: { color: string }) => {
     switch (urgency.color) {
+      case "blue":
+        return {
+          border: "border-l-blue-500",
+          badge:
+            "bg-blue-100 text-blue-800 dark:bg-blue-800/30 dark:text-blue-200",
+          time: "text-blue-600 dark:text-blue-400",
+          clock: "text-blue-500",
+        };
       case "emerald":
         return {
           border: "border-l-emerald-500",
@@ -274,9 +289,11 @@ export default function ChatAnalytics({ orgPhone }: ChatAnalyticsProps) {
     index: number;
     type: "open" | "delayed";
   }) => {
+    // Pass isOverdue flag to getUrgencyLevel - only overdue chats get color coding
     const urgency = getUrgencyLevel(
       type === "delayed" ? chat.hoursWithoutResponse : chat.ageInHours,
-      chat.urgencyLevel
+      chat.urgencyLevel,
+      type === "delayed" // Only apply urgency colors to delayed/overdue chats
     );
     const hours =
       type === "delayed" ? chat.hoursWithoutResponse : chat.ageInHours;

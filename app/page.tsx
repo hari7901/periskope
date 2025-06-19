@@ -45,7 +45,8 @@ const viewLabels: Record<HeatmapView, string> = {
 type TabType = "messages" | "chats";
 
 export default function HomePage() {
-  const [activeTab, setActiveTab] = useState<TabType>("messages");
+  // CHANGED: Set "chats" as the default tab instead of "messages"
+  const [activeTab, setActiveTab] = useState<TabType>("chats");
   const [timeFilter, setTimeFilter] =
     useState<keyof typeof timePeriodLabels>("last7days");
   const [startDateISO, setStartDateISO] = useState("");
