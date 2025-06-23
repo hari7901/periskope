@@ -293,12 +293,20 @@ function processChatsToMetrics(chats: Chat[], targetAgent: string): ChatMetrics 
   return metrics;
 }
 
-// Enhanced urgency calculation with DEBUGGING to identify the issue
+// Enhanced urgency calculation with support team logic
 function calculateChatUrgency(chat: Chat, currentTime: number) {
   let lastActivityTime: number;
   let ageMs: number;
   let requiresResponse = false;
   let urgencyLevel = "low";
+
+  // Define support team phone numbers (add all your support team phones here)
+  const supportTeamPhones = [
+    "918527014950@c.us", // Primary org_phone
+    "918527439222@c.us", // Secondary support (from flag_count_map in your JSON)
+    // Add other support team phone numbers here as needed
+    // "919xxxxxxxx@c.us",
+  ];
 
   // Determine last activity time
   if (chat.latest_message?.timestamp) {
@@ -312,10 +320,42 @@ function calculateChatUrgency(chat: Chat, currentTime: number) {
   ageMs = currentTime - lastActivityTime;
   const ageInHours = ageMs / (1000 * 60 * 60);
 
+  // Helper function to check if message is from support team
+  const isMessageFromSupportTeam = (message: any, chat: any): boolean => {
+    // Method 1: If from_me is true, it's definitely from support
+    if (message.from_me === true) {
+      console.log(`Message is from support team (from_me: true)`);
+      return true;
+    }
+    
+    // Method 2: Check if sender_phone is the org_phone (primary support)
+    if (message.sender_phone === chat.org_phone) {
+      console.log(`Message is from support team (sender matches org_phone: ${message.sender_phone})`);
+      return true;
+    }
+    
+    // Method 3: Check if sender_phone is in our support team list
+    if (supportTeamPhones.includes(message.sender_phone)) {
+      console.log(`Message is from support team (sender in support team list: ${message.sender_phone})`);
+      return true;
+    }
+    
+    // Method 4: Check if sender has access to the chat (is in chat_access)
+    if (chat.chat_access && Object.keys(chat.chat_access).length > 0) {
+      // For now, we'll consider any message from a known support phone as support
+      // You can enhance this by mapping phone numbers to emails in chat_access
+      console.log(`Chat has access control, but no phone-to-email mapping implemented yet`);
+    }
+    
+    console.log(`Message is from customer (sender: ${message.sender_phone}, not in support team)`);
+    return false;
+  };
+
   // DEBUGGING: Log every chat evaluation
   console.log(`\n=== CHAT EVALUATION: ${chat.chat_name} ===`);
   console.log(`Chat ID: ${chat.chat_id}`);
   console.log(`Has latest_message: ${!!chat.latest_message}`);
+  console.log(`Support team phones: ${supportTeamPhones.join(', ')}`);
   
   if (chat.latest_message) {
     console.log(`from_me: ${chat.latest_message.from_me}`);
@@ -323,23 +363,26 @@ function calculateChatUrgency(chat: Chat, currentTime: number) {
     console.log(`org_phone: ${chat.org_phone}`);
     console.log(`timestamp: ${chat.latest_message.timestamp}`);
     console.log(`hours since message: ${Math.round(((currentTime - new Date(chat.latest_message.timestamp).getTime()) / (1000 * 60 * 60)) * 100) / 100}`);
+    
+    // NEW: Log chat_access info
+    if (chat.chat_access) {
+      console.log(`chat_access members: ${Object.keys(chat.chat_access).join(', ')}`);
+    }
   }
 
-  // ULTRA-STRICT overdue logic with detailed logging
+  // ENHANCED overdue logic with support team check
   if (chat.latest_message) {
     const lastMessageTime = new Date(chat.latest_message.timestamp).getTime();
     const hoursSinceLastMessage = (currentTime - lastMessageTime) / (1000 * 60 * 60);
     
-    // Get the exact from_me value
-    const fromMeValue = chat.latest_message.from_me;
+    console.log(`Checking if message is from support team...`);
+    const isFromSupport = isMessageFromSupportTeam(chat.latest_message, chat);
     
-    console.log(`fromMeValue type: ${typeof fromMeValue}, value: ${fromMeValue}`);
-
-    // RULE 1: If from_me is true, NEVER overdue
-    if (fromMeValue === true) {
+    // RULE 1: If last message is from ANY support team member, NEVER overdue
+    if (isFromSupport) {
       requiresResponse = false;
       urgencyLevel = "low";
-      console.log(`RESULT: NOT OVERDUE - We sent last message (from_me: true)`);
+      console.log(`RESULT: NOT OVERDUE - Support team sent last message`);
       console.log(`=====================================\n`);
       
       return {
@@ -351,8 +394,8 @@ function calculateChatUrgency(chat: Chat, currentTime: number) {
       };
     }
 
-    // RULE 2: Only overdue if from_me is EXPLICITLY false AND > 24 hours
-    if (fromMeValue === false && hoursSinceLastMessage > 24) {
+    // RULE 2: Only overdue if from customer AND > 24 hours
+    if (!isFromSupport && hoursSinceLastMessage > 24) {
       requiresResponse = true;
       
       // Set urgency based on how long customer has been waiting
@@ -361,9 +404,9 @@ function calculateChatUrgency(chat: Chat, currentTime: number) {
       else if (hoursSinceLastMessage > 48) urgencyLevel = "medium"; 
       else urgencyLevel = "low"; 
       
-      console.log(`RESULT: OVERDUE - Customer waiting ${Math.round(hoursSinceLastMessage)}h (from_me: false)`);
+      console.log(`RESULT: OVERDUE - Customer waiting ${Math.round(hoursSinceLastMessage)}h (no support response)`);
       console.log(`=====================================\n`);
-    } else if (fromMeValue === false && hoursSinceLastMessage <= 24) {
+    } else if (!isFromSupport && hoursSinceLastMessage <= 24) {
       // Customer message but recent
       requiresResponse = false;
       urgencyLevel = "low";
@@ -373,7 +416,7 @@ function calculateChatUrgency(chat: Chat, currentTime: number) {
       // Any unclear case - default to NOT overdue
       requiresResponse = false;
       urgencyLevel = "low";
-      console.log(`RESULT: NOT OVERDUE - Unclear case (from_me: ${fromMeValue})`);
+      console.log(`RESULT: NOT OVERDUE - Unclear case`);
       console.log(`=====================================\n`);
     }
   } else {
